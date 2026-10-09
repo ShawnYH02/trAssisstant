@@ -39,6 +39,27 @@ python calibrate.py
    monitors, use `python calibrate.py --monitor 2` as necessary.
 4. Check `config.json`, which uses *physical desktop pixels*.
 
+## Calibrate NEXT and optional HOLD
+
+The queue tracker needs a separate crop around the preview icons:
+
+```powershell
+python calibrate_queue.py
+```
+
+Draw a tight rectangle around all vertically stacked NEXT piece icons, excluding
+the NEXT label and other colored UI. Enter the number of visible preview slots
+(normally five). You may then select the HOLD piece, or press Escape to skip it.
+
+Verify the preview reader before starting the overlay:
+
+```powershell
+python inspect_queue.py
+```
+
+It should print all NEXT identities instead of `UNREADABLE`. The diagnostic
+saves `debug_queue.png` locally; the file is excluded from Git.
+
 ## Run
 
 ```powershell
@@ -49,6 +70,11 @@ The overlay is click-through and does not send keyboard inputs. Stop with
 `Ctrl+C` in the launching terminal. For the initial test, use a static or
 slow-moving board and inspect output before trying motion.
 
+The preview contains future pieces, not the current piece. On startup the
+tracker first stabilizes the NEXT queue, then needs one normal placement and a
+confirmed queue shift before it can identify CURRENT. If the queue changes too
+quickly or unexpectedly, advice is suspended until tracking resynchronizes.
+
 ## Troubleshooting recognition
 
 Run `python inspect_capture.py` to save `debug_board.png` and print the detected
@@ -56,6 +82,9 @@ Run `python inspect_capture.py` to save `debug_board.png` and print the detected
 not match the game, correct the crop in `config.json` or experiment with the
 three thresholds. Do not share captured screenshots that contain private
 information.
+
+For NEXT/HOLD problems, rerun `python inspect_queue.py`. Recalibrate after
+moving or resizing the game window, and use the default colored preview skin.
 
 ## Tests
 
@@ -74,8 +103,11 @@ python -m pytest -q
   bumpiness, wells, and row transitions. It is not provably optimal.
 - Reads the 10×20 playfield plus four capture rows above it so a complete
   tetromino can be recognized before it enters the visible board.
-- Does not yet recognize HOLD/NEXT, gray ghost cells, garbage well enough for all
-  themes, special skins, spins, or 180° rotations.
+- Reads the colored NEXT queue and can optionally track HOLD. A greyed-out HOLD
+  icon may be unreadable, and queue tracking intentionally waits for a confirmed
+  shift instead of guessing the initial current piece.
+- Does not yet recognize gray ghost cells or garbage reliably across all themes,
+  special skins, spins, or 180° rotations.
 - Suggested routes are collision-checked in a turn-based model, but gravity,
   frame timing, auto-shift charge, and lock delay are not simulated. A legal
   route may still require faster execution than the current game state allows.
@@ -89,6 +121,5 @@ python -m pytest -q
   sampling regions.
 
 For serious analysis, next steps are: per-game color calibration and temporal
-piece tracking; next queue / hold OCR; exact SRS+ and 180° kick tables; beam
-search with the next 3-5 pieces; confidence indicators; saved-frame regression
-tests.
+piece tracking; exact SRS+ and 180° kick tables; lookahead search using the
+recognized queue; confidence indicators; saved-frame regression tests.

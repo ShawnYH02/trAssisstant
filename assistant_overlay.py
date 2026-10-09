@@ -14,9 +14,10 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from tetris_core import (read_cells, find_active, occupied_without_active,
-                         shift_active)
+from tetris_core import read_cells, occupied_without_active, shift_active
 from solver_v2 import find_best_v2, describe_action_v2
+from queue_first import (QueueTracker, UNOBSERVED, find_active_matching,
+                         read_hold_piece, read_next_queue)
 
 
 class Overlay(QWidget):
@@ -106,6 +107,10 @@ def main():
               "top": int(cfg["top"] - spawn_pixels),
               "width": int(cfg["width"]),
               "height": int(cfg["height"] + spawn_pixels)}
+    tracker = QueueTracker(stable_frames=max(1, int(cfg.get("queue_stable_frames", 3))))
+    queue_roi = cfg.get("next_queue_roi")
+    hold_roi = cfg.get("hold_piece_roi")
+    queue_slots = int(cfg.get("next_queue_slots", 5))
     timer = QTimer()
 
     def tick():
@@ -116,24 +121,51 @@ def main():
                                 value_min=cfg.get("value_min", 70),
                                 gray_value_min=cfg.get("gray_value_min", 108),
                                 rows=20 + spawn_rows)
-            active = find_active(labels)
-            if active is None:
+            if queue_roi is None:
                 overlay.target = None
-                overlay.text = "Waiting: piece not detected with confidence"
-                overlay.subtitle = "Try default skin, visible board and no bloom effects"
+                overlay.text = "NEXT not calibrated: run python calibrate_queue.py"
+                overlay.subtitle = "Board calibration is preserved; NEXT needs its own crop"
             else:
-                active = shift_active(active, -spawn_rows)
-                visible_labels = labels[spawn_rows:].copy()
-                stack = occupied_without_active(visible_labels, active)
-                best = find_best_v2(stack, active)
-                if best is None:
+                next_image = np.asarray(capture.grab(queue_roi))
+                upcoming = read_next_queue(
+                    next_image, slots=queue_slots,
+                    saturation_min=cfg.get("queue_saturation_min", 95),
+                    value_min=cfg.get("queue_value_min", 90),
+                    min_pixels=cfg.get("queue_min_pixels", 12))
+                held = (read_hold_piece(
+                    np.asarray(capture.grab(hold_roi)),
+                    saturation_min=cfg.get("queue_saturation_min", 95),
+                    value_min=cfg.get("queue_value_min", 90),
+                    min_pixels=cfg.get("queue_min_pixels", 12))
+                    if hold_roi is not None else UNOBSERVED)
+                current = tracker.observe(upcoming, held)
+                queue_text = " ".join(tracker.queue or ()) or "unreadable"
+                if current is None:
                     overlay.target = None
-                    overlay.text = "No safe hard-drop found"
+                    overlay.text = tracker.status
+                    overlay.subtitle = f"NEXT: {queue_text} | CURRENT unknown"
                 else:
-                    overlay.target = best.cells
-                    overlay.text = describe_action_v2(active, best)
-                    overlay.subtitle = (f"Heuristic score {best.score:.1f} | "
-                                        f"{best.cleared} lines | SRS-style; timing not modeled")
+                    active = find_active_matching(labels, current)
+                    if active is None:
+                        overlay.target = None
+                        overlay.text = f"CURRENT={current} | cannot locate four cells"
+                        overlay.subtitle = (f"NEXT: {queue_text} | identity known; "
+                                            "pose not visible")
+                    else:
+                        active = shift_active(active, -spawn_rows)
+                        visible_labels = labels[spawn_rows:].copy()
+                        stack = occupied_without_active(visible_labels, active)
+                        best = find_best_v2(stack, active)
+                        if best is None:
+                            overlay.target = None
+                            overlay.text = f"CURRENT={current} | no reachable placement"
+                            overlay.subtitle = tracker.status
+                        else:
+                            overlay.target = best.cells
+                            overlay.text = describe_action_v2(active, best)
+                            overlay.subtitle = (f"NEXT: {queue_text} | "
+                                                f"score {best.score:.1f} | "
+                                                f"{best.cleared} lines")
             overlay.update()
         except Exception as exc:
             overlay.target = None
