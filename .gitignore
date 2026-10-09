@@ -1,0 +1,21 @@
+# Local Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Machine-local calibration and captures
+config.json
+debug_board.png
+captures/
+
+# Local secrets and logs
+.env
+.env.*
+*.log
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
