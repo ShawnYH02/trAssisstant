@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from mss import MSS
-from auto_layout_v4 import detect_layout, rect
+from auto_layout_v4 import detect_layout, detect_next_group, rect
 
 
 def draw_layout(screen, data):
@@ -62,13 +62,13 @@ def main():
         if key in (ord('r'),ord('R')):
             b=select(screenshot,'Board (ESC to retain automatic)')
             if b is not None: layout['board']=b
-            print('Draw NEXT previews in order. Press ESC when finished.')
-            slots=[]
-            for i in range(1,6):
-                r=select(screenshot,f'NEXT #{i} (ESC to stop)')
-                if r is None:break
-                slots.append(r)
-            if len(slots)>=2:layout['next_rois']=slots
+            group=select(screenshot,'NEXT column (all preview pieces, no label)')
+            if group is not None:
+                slots=detect_next_group(screenshot,group)
+                if len(slots)>=2:
+                    layout['next_rois']=slots
+                else:
+                    print('Could not separate NEXT pieces. Draw a tighter NEXT column and retry.')
             hold=select(screenshot,'HOLD area (select even if empty/dark)')
             if hold is not None:
                 layout['hold']=hold

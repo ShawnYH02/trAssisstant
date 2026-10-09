@@ -38,10 +38,12 @@ Use `--monitor 2` when the game is on the second display. The preview uses:
 - Orange for each individual NEXT piece.
 - Pink for HOLD.
 
-Press Enter only when all rectangles are correct. Press R to redraw the board,
-each NEXT piece in order, and HOLD on the same captured frame. An inferred empty
-HOLD rectangle needs especially careful review. Existing unrelated config values
-are preserved and a local backup is made.
+Press Enter only when all rectangles are correct. Press R to make just three
+selections—BOARD, the whole NEXT preview column, and HOLD—on the same captured
+frame. The calibrator separates the NEXT column into individual internal boxes
+for reliable reading. An inferred empty HOLD rectangle needs especially careful
+review. Existing unrelated config values are preserved and a local backup is
+made.
 
 Verify recognition before starting the overlay:
 

@@ -13,6 +13,51 @@ def rect(left,top,width,height):
     return dict(left=int(left),top=int(top),width=int(width),height=int(height))
 
 
+def detect_next_group(frame, group):
+    """Split one manually selected NEXT column into per-piece rectangles."""
+    fh, fw = frame.shape[:2]
+    gx = max(0, int(group['left']))
+    gy = max(0, int(group['top']))
+    gw = min(int(group['width']), fw - gx)
+    gh = min(int(group['height']), fh - gy)
+    if gw < 8 or gh < 20:
+        return []
+    hsv = cv2.cvtColor(frame[gy:gy + gh, gx:gx + gw, :3], cv2.COLOR_BGR2HSV)
+    mask = ((hsv[:, :, 1] >= 65) & (hsv[:, :, 2] >= 55)).astype(np.uint8) * 255
+    kernel_size = max(3, round(gw * .03)) | 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,
+                                       (kernel_size, kernel_size))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    found = []
+    for contour in contours:
+        x, y, width, height = cv2.boundingRect(contour)
+        patch = hsv[y:y + height, x:x + width]
+        colored = (patch[:, :, 1] >= 65) & (patch[:, :, 2] >= 55)
+        hues = patch[:, :, 0][colored]
+        if len(hues) < max(9, int(gw * gh * .0005)):
+            continue
+        votes = {}
+        for hue in hues:
+            piece = hue_to_piece(float(hue))
+            if piece:
+                votes[piece] = votes.get(piece, 0) + 1
+        if not votes:
+            continue
+        dominant = max(votes.values())
+        if dominant < .62 * sum(votes.values()):
+            continue
+        pad = max(2, round(min(gw, gh) * .01))
+        left = max(0, x - pad)
+        top = max(0, y - pad)
+        right = min(gw, x + width + pad)
+        bottom = min(gh, y + height + pad)
+        found.append(rect(gx + left, gy + top, right - left, bottom - top))
+    found.sort(key=lambda roi: roi['top'])
+    return found if 2 <= len(found) <= 8 else []
+
+
 def detect_board_fullscreen(frame:np.ndarray):
     """Return board rectangle, confidence; None for no credible 10x20 region."""
     h,w=frame.shape[:2]
