@@ -79,11 +79,12 @@ tracker first stabilizes the NEXT queue, then needs one normal placement and a
 confirmed queue shift before it can identify CURRENT. If the queue changes too
 quickly or unexpectedly, advice is suspended until tracking resynchronizes.
 
-The V5 solver runs on a background worker so capture and Ctrl+C remain
-responsive. Its default target is depth 5 with a 190 ms budget; the HUD reports
+The V6 solver runs on a background worker so capture and Ctrl+C remain
+responsive. Its default target is depth 5 with a 250 ms budget; the HUD reports
 the depth actually completed and elapsed search time. Tune `search_depth`,
 `beam_width`, and `search_budget_ms` in `config.json` if needed. For an offline
-machine benchmark, run `python benchmark_v5.py`.
+comparison against V5, run `python benchmark_v6.py`; `selfplay_v6.py` provides
+a longer same-bag offline simulation.
 
 ## Troubleshooting recognition
 
@@ -110,6 +111,9 @@ python -m pytest -q
 - Plans up to five pieces using the recognized NEXT queue, beam pruning, and an
   S1-inspired heuristic for Quads, T-spins, B2B chains, and combos. HOLD is
   considered only when the tracker reports it available.
+- V6 preserves diverse first-move candidates, caps continuations per parent,
+  rewards perfect clears, and evaluates nonlinear height danger, buried holes,
+  transitions, roughness, and accessible wells.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
@@ -128,6 +132,8 @@ python -m pytest -q
 - Only CURRENT receives a collision-checked action path. Future placements are
   forecasting candidates, not guaranteed input routes, and the scoring is an
   approximation rather than an exact attack simulator.
+- Offline benchmark/self-play metrics are heuristic comparisons, not evidence
+  of multiplayer strength or parity with mature Tetris engines.
 - Fits the queue-identified active shape against the board and can tolerate one
   missing or misclassified cell when recent pose evidence resolves ambiguity.
   It suspends suggestions when position or rotation is not sufficiently clear.

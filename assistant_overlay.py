@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from tetris_core import read_cells, occupied_without_active, shift_active
-from solver_v5 import SearchSettings, describe_action_v5, find_best_v5
+from solver_v6 import SearchSettingsV6, describe_action_v6, find_best_v6
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
                        read_queue_region, read_queue_rois)
@@ -29,7 +29,7 @@ class Overlay(QWidget):
         self.cfg = config
         self.target = None
         self.text = "Looking for a complete falling tetromino..."
-        self.subtitle = "Solver V5 / S1-style lookahead / collision-checked CURRENT"
+        self.subtitle = "Solver V6 / root-diverse lookahead / collision-checked CURRENT"
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
                             Qt.WindowType.WindowStaysOnTopHint |
                             Qt.WindowType.Tool |
@@ -130,10 +130,10 @@ def main():
                    "height": int(max(bottoms) - min(tops))}
     else:
         hud_box = None
-    search_settings = SearchSettings(
+    search_settings = SearchSettingsV6(
         depth=int(cfg.get("search_depth", 5)),
-        beam_width=int(cfg.get("beam_width", 30)),
-        time_budget_ms=float(cfg.get("search_budget_ms", 190)),
+        beam_width=int(cfg.get("beam_width", 24)),
+        time_budget_ms=float(cfg.get("search_budget_ms", 250)),
         allow_hold=bool(cfg.get("search_allow_hold", True)))
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
@@ -228,7 +228,7 @@ def main():
                         if result_key != state_key and solver_future is None:
                             pending_key = state_key
                             solver_future = solver_pool.submit(
-                                find_best_v5, stack.copy(), active,
+                                find_best_v6, stack.copy(), active,
                                 tuple(tracker.queue or ()), tracker.hold,
                                 tracker.can_hold, search_settings)
                         best = result if result_key == state_key else None
@@ -243,7 +243,7 @@ def main():
                             overlay.subtitle = tracker.status
                         else:
                             overlay.target = best.cells
-                            overlay.text = describe_action_v5(active, best)
+                            overlay.text = describe_action_v6(active, best)
                             cooldown = ("ready" if tracker.can_hold else
                                         "used" if tracker.can_hold is False else "?")
                             overlay.subtitle = (f"HOLD: {tracker.hold or 'empty'} "
