@@ -6,9 +6,9 @@
 > Rules: https://tetr.io/about/rules/
 
 A non-controlling experiment that captures a visible Tetris board, detects a
-falling tetromino using default colors, searches collision-checked placements,
-and paints a click-through landing outline plus a finesse-style route. Runs
-locally.
+falling tetromino using default colors, searches collision-checked placements
+with queue/HOLD lookahead, and paints a click-through landing outline plus a
+finesse-style route. Runs locally.
 
 ## Install
 
@@ -79,6 +79,12 @@ tracker first stabilizes the NEXT queue, then needs one normal placement and a
 confirmed queue shift before it can identify CURRENT. If the queue changes too
 quickly or unexpectedly, advice is suspended until tracking resynchronizes.
 
+The V5 solver runs on a background worker so capture and Ctrl+C remain
+responsive. Its default target is depth 5 with a 190 ms budget; the HUD reports
+the depth actually completed and elapsed search time. Tune `search_depth`,
+`beam_width`, and `search_budget_ms` in `config.json` if needed. For an offline
+machine benchmark, run `python benchmark_v5.py`.
+
 ## Troubleshooting recognition
 
 Run `python inspect_capture.py` to save `debug_board.png` and print the detected
@@ -101,6 +107,9 @@ python -m pytest -q
 - Searches from the currently detected position and rotation. Taps,
   hold-to-obstacle moves, soft drops, 90° rotations, and hard drops are checked
   for collisions before a route is suggested.
+- Plans up to five pieces using the recognized NEXT queue, beam pruning, and an
+  S1-inspired heuristic for Quads, T-spins, B2B chains, and combos. HOLD is
+  considered only when the tracker reports it available.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
@@ -116,6 +125,9 @@ python -m pytest -q
 - Suggested routes are collision-checked in a turn-based model, but gravity,
   frame timing, auto-shift charge, and lock delay are not simulated. A legal
   route may still require faster execution than the current game state allows.
+- Only CURRENT receives a collision-checked action path. Future placements are
+  forecasting candidates, not guaranteed input routes, and the scoring is an
+  approximation rather than an exact attack simulator.
 - Fits the queue-identified active shape against the board and can tolerate one
   missing or misclassified cell when recent pose evidence resolves ambiguity.
   It suspends suggestions when position or rotation is not sufficiently clear.
@@ -126,5 +138,5 @@ python -m pytest -q
   sampling regions.
 
 For serious analysis, next steps are: per-game color calibration and temporal
-piece tracking; exact SRS+ and 180° kick tables; lookahead search using the
-recognized queue; confidence indicators; saved-frame regression tests.
+piece tracking; exact SRS+ and 180° kick tables; exact attack/B2B/combo state
+tracking; confidence indicators; saved-frame regression tests.

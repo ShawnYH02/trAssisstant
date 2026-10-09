@@ -7,6 +7,7 @@ import json
 import signal
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from tetris_core import read_cells, occupied_without_active, shift_active
-from solver_v2 import find_best_v2, describe_action_v2
+from solver_v5 import SearchSettings, describe_action_v5, find_best_v5
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
                        read_queue_region, read_queue_rois)
@@ -28,7 +29,7 @@ class Overlay(QWidget):
         self.cfg = config
         self.target = None
         self.text = "Looking for a complete falling tetromino..."
-        self.subtitle = "Solver V2 / collision-checked path / no lookahead"
+        self.subtitle = "Solver V5 / S1-style lookahead / collision-checked CURRENT"
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
                             Qt.WindowType.WindowStaysOnTopHint |
                             Qt.WindowType.Tool |
@@ -129,12 +130,24 @@ def main():
                    "height": int(max(bottoms) - min(tops))}
     else:
         hud_box = None
+    search_settings = SearchSettings(
+        depth=int(cfg.get("search_depth", 5)),
+        beam_width=int(cfg.get("beam_width", 30)),
+        time_budget_ms=float(cfg.get("search_budget_ms", 190)),
+        allow_hold=bool(cfg.get("search_allow_hold", True)))
+    solver_pool = ThreadPoolExecutor(max_workers=1,
+                                     thread_name_prefix="tetris-solver")
+    solver_future = None
+    pending_key = None
+    result_key = None
+    result = None
     timer = QTimer()
     shutdown_timer = QTimer()
     stop_requested = threading.Event()
 
     def tick():
         nonlocal previous_active, previous_name, previous_queue
+        nonlocal solver_future, pending_key, result_key, result
         try:
             screenshot = np.asarray(capture.grab(region))
             labels = read_cells(screenshot,
@@ -201,18 +214,42 @@ def main():
                         active = shift_active(active, -spawn_rows)
                         visible_labels = labels[spawn_rows:].copy()
                         stack = occupied_without_active(visible_labels, active)
-                        best = find_best_v2(stack, active)
-                        if best is None:
+                        state_key = (stack.tobytes(), active.name,
+                                     active.rotation, active.x,
+                                     tuple(tracker.queue or ()), tracker.hold,
+                                     tracker.can_hold, search_settings)
+                        if solver_future is not None and solver_future.done():
+                            completed = solver_future
+                            completed_key = pending_key
+                            solver_future = None
+                            pending_key = None
+                            result = completed.result()
+                            result_key = completed_key
+                        if result_key != state_key and solver_future is None:
+                            pending_key = state_key
+                            solver_future = solver_pool.submit(
+                                find_best_v5, stack.copy(), active,
+                                tuple(tracker.queue or ()), tracker.hold,
+                                tracker.can_hold, search_settings)
+                        best = result if result_key == state_key else None
+                        if result_key != state_key:
+                            overlay.target = None
+                            overlay.text = f"CURRENT={current} | planning lookahead..."
+                            overlay.subtitle = (f"NEXT: {queue_text} | "
+                                                "capture remains responsive")
+                        elif best is None:
                             overlay.target = None
                             overlay.text = f"CURRENT={current} | no reachable placement"
                             overlay.subtitle = tracker.status
                         else:
                             overlay.target = best.cells
-                            overlay.text = describe_action_v2(active, best)
+                            overlay.text = describe_action_v5(active, best)
                             cooldown = ("ready" if tracker.can_hold else
                                         "used" if tracker.can_hold is False else "?")
                             overlay.subtitle = (f"HOLD: {tracker.hold or 'empty'} "
                                                 f"({cooldown}) | NEXT: {queue_text} | "
+                                                f"D{best.depth_used} / "
+                                                f"{best.elapsed_ms:.0f}ms | "
                                                 f"score {best.score:.1f}")
             overlay.update()
         except Exception as exc:
@@ -268,6 +305,7 @@ def main():
         shutdown_timer.stop()
         overlay.close()
         capture.close()
+        solver_pool.shutdown(wait=False, cancel_futures=True)
         if console_handler is not None:
             try:
                 ctypes.windll.kernel32.SetConsoleCtrlHandler(console_handler, False)

@@ -14,6 +14,7 @@ captures/
 
 # Local calibration backups
 config.json.*.bak
+assistant_overlay.py.*.bak
 
 # Local secrets and logs
 .env
