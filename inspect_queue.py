@@ -5,6 +5,7 @@ import json
 import cv2
 import numpy as np
 from mss import MSS
+from mss.exception import ScreenShotError
 from queue_first import read_next_queue, read_hold_piece
 
 
@@ -14,10 +15,15 @@ def main():
     roi = cfg.get('next_queue_roi')
     if roi is None:
         raise SystemExit('Missing NEXT ROI. Run python calibrate_queue.py first.')
-    with MSS() as capture:
-        frame = np.asarray(capture.grab(roi))
-        held = (np.asarray(capture.grab(cfg['hold_piece_roi']))
-                if 'hold_piece_roi' in cfg else None)
+    try:
+        with MSS() as capture:
+            frame = np.asarray(capture.grab(roi))
+            held = (np.asarray(capture.grab(cfg['hold_piece_roi']))
+                    if 'hold_piece_roi' in cfg else None)
+    except ScreenShotError as exc:
+        raise SystemExit(
+            "Screen capture failed. Stop the running overlay, keep the Windows "
+            "desktop unlocked and TETR.IO visible, then try again. " + str(exc))
     result = read_next_queue(frame, slots=int(cfg.get('next_queue_slots', 5)),
         saturation_min=cfg.get('queue_saturation_min', 95),
         value_min=cfg.get('queue_value_min', 90))

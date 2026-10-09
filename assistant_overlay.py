@@ -6,6 +6,7 @@ from ctypes import wintypes
 import json
 import signal
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -112,6 +113,8 @@ def main():
     hold_roi = cfg.get("hold_piece_roi")
     queue_slots = int(cfg.get("next_queue_slots", 5))
     timer = QTimer()
+    shutdown_timer = QTimer()
+    stop_requested = threading.Event()
 
     def tick():
         try:
@@ -175,11 +178,57 @@ def main():
 
     timer.timeout.connect(tick)
     timer.start(80)  # ~12.5 Hz; lower than 60 FPS to keep CPU and UI responsive
-    signal.signal(signal.SIGINT, lambda *_: app.quit())
-    app.aboutToQuit.connect(capture.close)
-    print("Running. Ctrl+C in this terminal stops the overlay.")
+
+    def request_stop(*_args):
+        stop_requested.set()
+
+    def stop_if_requested():
+        if stop_requested.is_set():
+            shutdown_timer.stop()
+            app.quit()
+
+    signal.signal(signal.SIGINT, request_stop)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, request_stop)
+
+    # Python signals can be delayed while Qt owns the Windows event loop. A
+    # native console callback only sets a thread-safe flag; Qt performs the
+    # actual shutdown on its main thread during the next poll.
+    console_handler = None
+    try:
+        handler_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+        @handler_type
+        def console_handler(event):
+            if event in (0, 1):  # CTRL_C_EVENT / CTRL_BREAK_EVENT
+                stop_requested.set()
+                return True
+            return False
+
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(console_handler, True)
+    except (AttributeError, OSError):
+        console_handler = None
+
+    shutdown_timer.timeout.connect(stop_if_requested)
+    shutdown_timer.start(50)
+    print("Running. Ctrl+C or Ctrl+Break in this terminal stops the overlay.")
     tick()
-    raise SystemExit(app.exec())
+    exit_code = 0
+    try:
+        exit_code = app.exec()
+    except KeyboardInterrupt:
+        request_stop()
+    finally:
+        timer.stop()
+        shutdown_timer.stop()
+        overlay.close()
+        capture.close()
+        if console_handler is not None:
+            try:
+                ctypes.windll.kernel32.SetConsoleCtrlHandler(console_handler, False)
+            except (AttributeError, OSError):
+                pass
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

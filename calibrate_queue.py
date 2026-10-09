@@ -41,6 +41,10 @@ def main():
                       left=virtual['left'], top=virtual['top'], scale=scale)
     if nxt is None:
         raise SystemExit("NEXT ROI not selected. No config changes.")
+    if nxt['height'] < 1.5 * nxt['width']:
+        raise SystemExit(
+            "NEXT selection is too wide. Select only the narrow vertical column "
+            "of colored preview pieces, then rerun calibration. No config changes.")
     cfg['next_queue_roi'] = nxt
     slots = input("How many NEXT preview pieces fit in selection? [5]: ").strip()
     try:
@@ -52,6 +56,10 @@ def main():
     print("Optional: select the piece image in HOLD. ESC or CANCEL skips.")
     hold = select_rect(display, 'Select HOLD preview, or ESC to skip',
                        left=virtual['left'], top=virtual['top'], scale=scale)
+    if hold is not None and hold['height'] > 1.5 * hold['width']:
+        raise SystemExit(
+            "HOLD selection is too tall. Select only the single HOLD piece icon, "
+            "or cancel to skip HOLD. No config changes.")
     if hold is not None:
         cfg['hold_piece_roi'] = hold
     else:
