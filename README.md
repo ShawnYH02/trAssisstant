@@ -6,8 +6,9 @@
 > Rules: https://tetr.io/about/rules/
 
 A non-controlling experiment that captures a visible Tetris board, detects a
-falling tetromino using default colors, ranks hard-drop landings, and paints a
-click-through outline plus a minimum-input finesse-style route. Runs locally.
+falling tetromino using default colors, searches collision-checked placements,
+and paints a click-through landing outline plus a finesse-style route. Runs
+locally.
 
 ## Install
 
@@ -50,10 +51,11 @@ slow-moving board and inspect output before trying motion.
 
 ## Troubleshooting recognition
 
-Run `python inspect_capture.py` to save `debug_board.png` and print a 20x10
-ASCII representation of detected cells. If the cells do not match the actual
-board, correct the crop in `config.json` or experiment with the three thresholds.
-Do not share captured screenshots that contain private information.
+Run `python inspect_capture.py` to save `debug_board.png` and print the detected
+10-column grid, including the four capture rows above the board. If the cells do
+not match the game, correct the crop in `config.json` or experiment with the
+three thresholds. Do not share captured screenshots that contain private
+information.
 
 ## Tests
 
@@ -63,15 +65,20 @@ python -m pytest -q
 
 ## Scope and limitations
 
-- Samples one piece at a time and ranks simple **straight hard-drop** placements
-  by line clears, heights, holes and bumpiness. It is *not* provably optimal.
+- Searches from the currently detected position and rotation. Taps,
+  hold-to-obstacle moves, soft drops, 90° rotations, and hard drops are checked
+  for collisions before a route is suggested.
+- Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
+  TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
+- Ranks placements using line clears, height, holes, covered holes, surface
+  bumpiness, wells, and row transitions. It is not provably optimal.
 - Reads the 10×20 playfield plus four capture rows above it so a complete
   tetromino can be recognized before it enters the visible board.
 - Does not yet recognize HOLD/NEXT, gray ghost cells, garbage well enough for all
-  themes, special skins, spins, 180/SRS+ kicks or actual input-path reachability.
-- Finesse suggestions minimize taps, rotations and DAS-to-wall inputs in this
-  prototype's bounding-box model. They remain **approximate**, because SRS+
-  rotation centers, kicks, collision paths and frame-perfect DAS are not modeled.
+  themes, special skins, spins, or 180° rotations.
+- Suggested routes are collision-checked in a turn-based model, but gravity,
+  frame timing, auto-shift charge, and lock delay are not simulated. A legal
+  route may still require faster execution than the current game state allows.
 - Detects an active piece as the uppermost **isolated four-cell colored group**.
   If a piece touches a locked group of the same color, lies partly offscreen,
   or the skin is unusual, it intentionally suspends suggestions or may err.
@@ -82,5 +89,6 @@ python -m pytest -q
   sampling regions.
 
 For serious analysis, next steps are: per-game color calibration and temporal
-piece tracking; next queue / hold OCR; exact SRS+ kick/action search; beam search
-with next 3-5 pieces; confidence indicators; dedicated offline test harness.
+piece tracking; next queue / hold OCR; exact SRS+ and 180° kick tables; beam
+search with the next 3-5 pieces; confidence indicators; saved-frame regression
+tests.

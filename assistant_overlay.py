@@ -14,8 +14,9 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from tetris_core import (read_cells, find_active, find_best,
-                         occupied_without_active, describe_action, shift_active)
+from tetris_core import (read_cells, find_active, occupied_without_active,
+                         shift_active)
+from solver_v2 import find_best_v2, describe_action_v2
 
 
 class Overlay(QWidget):
@@ -24,7 +25,7 @@ class Overlay(QWidget):
         self.cfg = config
         self.target = None
         self.text = "Looking for a complete falling tetromino..."
-        self.subtitle = "Default skin / one piece / hard drops only"
+        self.subtitle = "Solver V2 / collision-checked path / no lookahead"
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
                             Qt.WindowType.WindowStaysOnTopHint |
                             Qt.WindowType.Tool |
@@ -65,17 +66,18 @@ class Overlay(QWidget):
         label_y = (top - spawn_height - 63 if top >= spawn_height + 67
                    else top + self.cfg["height"] + 8)
         label_y = max(0, min(label_y, self.height()-57))
-        label_x = max(0, min(left, self.width()-440))
+        label_width = min(620, self.width())
+        label_x = max(0, min(left, self.width() - label_width))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(8, 13, 21, 222))
-        painter.drawRoundedRect(QRectF(label_x, label_y, 440, 56), 8, 8)
+        painter.drawRoundedRect(QRectF(label_x, label_y, label_width, 56), 8, 8)
         painter.setPen(QColor(239, 249, 251))
         painter.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-        painter.drawText(QRectF(label_x+12, label_y+4, 418, 25),
+        painter.drawText(QRectF(label_x+12, label_y+4, label_width-24, 25),
                          Qt.AlignmentFlag.AlignVCenter, self.text)
         painter.setFont(QFont("Segoe UI", 8))
         painter.setPen(QColor(161, 184, 188))
-        painter.drawText(QRectF(label_x+12, label_y+29, 418, 20),
+        painter.drawText(QRectF(label_x+12, label_y+29, label_width-24, 20),
                          Qt.AlignmentFlag.AlignVCenter, self.subtitle)
         painter.end()
 
@@ -123,15 +125,15 @@ def main():
                 active = shift_active(active, -spawn_rows)
                 visible_labels = labels[spawn_rows:].copy()
                 stack = occupied_without_active(visible_labels, active)
-                best = find_best(stack, active.name)
+                best = find_best_v2(stack, active)
                 if best is None:
                     overlay.target = None
                     overlay.text = "No safe hard-drop found"
                 else:
                     overlay.target = best.cells
-                    overlay.text = describe_action(active, best)
+                    overlay.text = describe_action_v2(active, best)
                     overlay.subtitle = (f"Heuristic score {best.score:.1f} | "
-                                        f"{best.cleared} lines | not exact SRS+ instructions")
+                                        f"{best.cleared} lines | SRS-style; timing not modeled")
             overlay.update()
         except Exception as exc:
             overlay.target = None

@@ -6,8 +6,9 @@ import cv2
 import numpy as np
 from mss import MSS
 
-from tetris_core import (read_cells, find_active, find_best,
-                         occupied_without_active, describe_action, shift_active)
+from tetris_core import (read_cells, find_active, occupied_without_active,
+                         shift_active)
+from solver_v2 import find_best_v2, describe_action_v2
 
 
 def main():
@@ -32,10 +33,10 @@ def main():
     active = find_active(cells)
     if active:
         active = shift_active(active, -spawn_rows)
-        best = find_best(occupied_without_active(cells[spawn_rows:].copy(), active),
-                         active.name)
+        best = find_best_v2(
+            occupied_without_active(cells[spawn_rows:].copy(), active), active)
         print("Detected:", active)
-        print("Recommendation:", describe_action(active, best))
+        print("Recommendation:", describe_action_v2(active, best))
     else:
         print("No intact 4-cell active piece found.")
     print("Saved debug_board.png to inspect crop alignment and colors.")
