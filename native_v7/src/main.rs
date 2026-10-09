@@ -255,7 +255,7 @@ fn board_value(rows: &Board) -> f64 {
     let aggregate: i32 = heights.iter().sum();
     let mut rough = 0.0;
     for x in 0..(W-1) { rough += (heights[x] - heights[x+1]).abs() as f64; }
-    let mut well_reward=0.0;
+    let mut well_reward: f64=0.0;
     if holes == 0.0 && maxh < 17.0 {
         // Side wells only. Reward *readiness*, not indefinite height growth.
         for (well,neighbor) in [(0usize,1usize),(9usize,8usize)] {
@@ -385,7 +385,7 @@ fn handle_request(line: &str) -> String {
             let result=search(req);
             format!("OK {} {:.8} {} {} {}",result.root,result.score,result.depth,result.nodes,result.elapsed_ms)
         }
-        Err(err) => format!("ERR {}",err.replace(' ','_')),
+        Err(err) => format!("ERR {}",err.replace(' ',"_")),
     }
 }
 fn main() {
@@ -419,7 +419,7 @@ mod tests {
     fn t_corners_require_last_rotation() {
         let mut b=[0u16;H];
         b[17]=(1<<3)|(1<<5);
-        b[19]=(1<<3);
+        b[19]=1<<3;
         let pose=Pose{x:3,y:17,r:0};
         assert_eq!(spin_type(&b,pose,false),Spin::None);
         assert_eq!(spin_type(&b,pose,true),Spin::Full);

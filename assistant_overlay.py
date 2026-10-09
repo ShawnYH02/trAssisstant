@@ -142,6 +142,7 @@ def main():
         solve_function = find_best_v7
         describe_function = describe_action_v7
         overlay.subtitle = "Solver V7 native / reachable future search"
+        print(f"Native V7 engine enabled: {native_path()}")
     else:
         search_settings = SearchSettingsV6(
             depth=int(cfg.get("search_depth", 5)),
