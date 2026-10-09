@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from tetris_core import ActivePiece, ROTATIONS, SPAWN, hue_to_piece
 from queue_first import _piece_votes
+from auto_layout_v4 import detect_next_group
 
 PIECES = set('IJLOSTZ')
 
@@ -28,6 +29,20 @@ def read_queue_rois(screen_bgra: np.ndarray, rois: list[dict], origin: tuple[int
             return None
         ans.append(p)
     return tuple(ans) if len(ans)>=2 else None
+
+
+def read_queue_region(image: np.ndarray, saturation_min: int = 65,
+                      value_min: int = 55) -> Optional[tuple[str, ...]]:
+    """Find and read all preview pieces inside one live NEXT-region crop."""
+    if image.size == 0 or image.ndim != 3 or image.shape[2] not in (3, 4):
+        return None
+    h, w = image.shape[:2]
+    group = {'left': 0, 'top': 0, 'width': w, 'height': h}
+    rois = detect_next_group(image, group, saturation_min, value_min)
+    if len(rois) < 2:
+        return None
+    return read_queue_rois(image, rois, saturation_min=saturation_min,
+                           value_min=value_min)
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from tetris_core import ROTATIONS, ActivePiece
 from vision_v4 import (HoldView, PieceTrackerV4, read_hold_view,
-                       locate_expected_piece,read_queue_rois)
+                       locate_expected_piece,read_queue_region,read_queue_rois)
 from auto_layout_v4 import (detect_layout, detect_board_fullscreen,
                             detect_next_group)
 
@@ -120,6 +120,9 @@ def test_manual_next_column_is_split_into_individual_previews():
     rois=detect_next_group(img,group)
     assert len(rois)==5,rois
     assert read_queue_rois(img,rois)==tuple('IOTSL')
+    crop=img[group['top']:group['top']+group['height'],
+             group['left']:group['left']+group['width']]
+    assert read_queue_region(crop)==tuple('IOTSL')
 
 def test_first_hold_grayscale_detected_using_current_identity():
     img=np.full((65,90,3), (12,12,12),np.uint8)

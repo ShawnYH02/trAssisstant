@@ -13,7 +13,7 @@ def rect(left,top,width,height):
     return dict(left=int(left),top=int(top),width=int(width),height=int(height))
 
 
-def detect_next_group(frame, group):
+def detect_next_group(frame, group, saturation_min=65, value_min=55):
     """Split one manually selected NEXT column into per-piece rectangles."""
     fh, fw = frame.shape[:2]
     gx = max(0, int(group['left']))
@@ -23,7 +23,8 @@ def detect_next_group(frame, group):
     if gw < 8 or gh < 20:
         return []
     hsv = cv2.cvtColor(frame[gy:gy + gh, gx:gx + gw, :3], cv2.COLOR_BGR2HSV)
-    mask = ((hsv[:, :, 1] >= 65) & (hsv[:, :, 2] >= 55)).astype(np.uint8) * 255
+    mask = ((hsv[:, :, 1] >= saturation_min) &
+            (hsv[:, :, 2] >= value_min)).astype(np.uint8) * 255
     kernel_size = max(3, round(gw * .03)) | 1
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT,
                                        (kernel_size, kernel_size))
@@ -34,7 +35,8 @@ def detect_next_group(frame, group):
     for contour in contours:
         x, y, width, height = cv2.boundingRect(contour)
         patch = hsv[y:y + height, x:x + width]
-        colored = (patch[:, :, 1] >= 65) & (patch[:, :, 2] >= 55)
+        colored = ((patch[:, :, 1] >= saturation_min) &
+                   (patch[:, :, 2] >= value_min))
         hues = patch[:, :, 0][colored]
         if len(hues) < max(9, int(gw * gh * .0005)):
             continue

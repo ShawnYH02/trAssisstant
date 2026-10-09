@@ -1,26 +1,45 @@
 """Read saved V4 preview rectangles once and print recognized NEXT/HOLD."""
 from __future__ import annotations
+import argparse
 import json
+import time
 from pathlib import Path
 import cv2
 import numpy as np
 from mss import MSS
-from vision_v4 import read_queue_rois,read_hold_view
+from vision_v4 import read_queue_region,read_queue_rois,read_hold_view
 
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--delay',type=int,default=3,
+                        help='seconds to switch focus back to TETR.IO before capture')
+    args=parser.parse_args()
     cfg=json.loads(Path('config.json').read_text(encoding='utf-8'))
+    region=cfg.get('next_queue_region')
     rois=cfg.get('next_piece_rois') or []
-    if len(rois)<2:
-        raise SystemExit('Missing next_piece_rois; run python calibrate_all.py')
-    xs=[r['left'] for r in rois]; ys=[r['top'] for r in rois]
-    xe=[r['left']+r['width'] for r in rois]
-    ye=[r['top']+r['height'] for r in rois]
-    bounds={'left':int(min(xs)), 'top':int(min(ys)),
-            'width':int(max(xe)-min(xs)), 'height':int(max(ye)-min(ys))}
+    if region is None and len(rois)<2:
+        raise SystemExit('Missing NEXT region; run python calibrate_all.py')
+    if region is not None:
+        bounds={key:int(region[key]) for key in ('left','top','width','height')}
+    else:
+        xs=[r['left'] for r in rois]; ys=[r['top'] for r in rois]
+        xe=[r['left']+r['width'] for r in rois]
+        ye=[r['top']+r['height'] for r in rois]
+        bounds={'left':int(min(xs)), 'top':int(min(ys)),
+                'width':int(max(xe)-min(xs)), 'height':int(max(ye)-min(ys))}
+    delay=max(0,args.delay)
+    if delay:
+        print(f'Switch to TETR.IO now; capturing in {delay} seconds...')
+        time.sleep(delay)
     with MSS() as capturer:
         img=np.asarray(capturer.grab(bounds))
-        upcoming=read_queue_rois(img,rois,(bounds['left'],bounds['top']))
+        if region is not None:
+            upcoming=read_queue_region(
+                img,saturation_min=cfg.get('queue_saturation_min',65),
+                value_min=cfg.get('queue_value_min',55))
+        else:
+            upcoming=read_queue_rois(img,rois,(bounds['left'],bounds['top']))
         held_roi=cfg.get('hold_piece_roi')
         if held_roi is not None:
             held_img=np.asarray(capturer.grab(held_roi))

@@ -32,7 +32,8 @@ visible, then run the one-screen calibrator:
 python calibrate_all.py --monitor 1
 ```
 
-Use `--monitor 2` when the game is on the second display. The preview uses:
+Switch focus back to TETR.IO during the three-second capture delay. Use
+`--monitor 2` when the game is on the second display. The preview uses:
 
 - Green for the 10×20 board.
 - Orange for each individual NEXT piece.
@@ -40,10 +41,10 @@ Use `--monitor 2` when the game is on the second display. The preview uses:
 
 Press Enter only when all rectangles are correct. Press R to make just three
 selections—BOARD, the whole NEXT preview column, and HOLD—on the same captured
-frame. The calibrator separates the NEXT column into individual internal boxes
-for reliable reading. An inferred empty HOLD rectangle needs especially careful
-review. Existing unrelated config values are preserved and a local backup is
-made.
+frame. During play, the overlay re-detects and reads the pieces inside the saved
+NEXT region on every frame; calibration-time internal boxes are diagnostic only.
+An inferred empty HOLD rectangle needs especially careful review. Existing
+unrelated config values are preserved and a local backup is made.
 
 Verify recognition before starting the overlay:
 
@@ -51,8 +52,9 @@ Verify recognition before starting the overlay:
 python inspect_v4.py
 ```
 
-It should print readable NEXT and HOLD results. Diagnostic crops stay local and
-are excluded from Git.
+Switch back to TETR.IO during its three-second delay as well. It should print
+readable NEXT and HOLD results. Diagnostic crops stay local and are excluded
+from Git.
 
 The older separate calibrators remain available if needed:
 

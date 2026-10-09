@@ -19,7 +19,7 @@ from tetris_core import read_cells, occupied_without_active, shift_active
 from solver_v2 import find_best_v2, describe_action_v2
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
-                       read_queue_rois)
+                       read_queue_region, read_queue_rois)
 
 
 class Overlay(QWidget):
@@ -111,6 +111,7 @@ def main():
               "height": int(cfg["height"] + spawn_pixels)}
     tracker = PieceTrackerV4(
         stable_frames=max(1, int(cfg.get("queue_stable_frames", 3))))
+    next_region = cfg.get("next_queue_region")
     next_rois = cfg.get("next_piece_rois") or []
     queue_roi = cfg.get("next_queue_roi")
     hold_roi = cfg.get("hold_piece_roi")
@@ -141,12 +142,17 @@ def main():
                                 value_min=cfg.get("value_min", 70),
                                 gray_value_min=cfg.get("gray_value_min", 108),
                                 rows=20 + spawn_rows)
-            if not next_rois and queue_roi is None:
+            if next_region is None and not next_rois and queue_roi is None:
                 overlay.target = None
                 overlay.text = "NEXT not calibrated: run python calibrate_all.py"
                 overlay.subtitle = "Confirm BOARD, individual NEXT pieces, and HOLD"
             else:
-                if next_rois:
+                if next_region is not None:
+                    upcoming = read_queue_region(
+                        np.asarray(capture.grab(next_region)),
+                        saturation_min=cfg.get("queue_saturation_min", 65),
+                        value_min=cfg.get("queue_value_min", 55))
+                elif next_rois:
                     upcoming = read_queue_rois(
                         np.asarray(capture.grab(hud_box)), next_rois,
                         (hud_box["left"], hud_box["top"]),
