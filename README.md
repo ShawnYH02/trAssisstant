@@ -23,42 +23,42 @@ python -m pip install -r requirements.txt
 If PowerShell blocks venv activation, use `.venv\Scripts\python.exe` instead
 of `python` below (or run the commands in Command Prompt).
 
-## Calibrate
+## Calibrate (recommended)
 
-1. Open the game in a window with a default color theme, minimal effects, and
-   a clean 10-column × 20-row visible playfield.
-2. Pause on a frame where the playfield borders are visible, then run:
+Open the game in a window with its board, colored NEXT previews, and HOLD area
+visible, then run the one-screen calibrator:
 
 ```powershell
-python calibrate.py
+python calibrate_all.py --monitor 1
 ```
 
-3. Drag a loose crop around the board with a little padding. The calibrator
-   detects and snaps to a 10×20 playfield, then shows a green confirmation box.
-   Press Enter to accept or R to draw the rough area again. On multiple
-   monitors, use `python calibrate.py --monitor 2` as necessary.
-4. Check `config.json`, which uses *physical desktop pixels*.
+Use `--monitor 2` when the game is on the second display. The preview uses:
 
-## Calibrate NEXT and optional HOLD
+- Green for the 10×20 board.
+- Orange for each individual NEXT piece.
+- Pink for HOLD.
 
-The queue tracker needs a separate crop around the preview icons:
+Press Enter only when all rectangles are correct. Press R to redraw the board,
+each NEXT piece in order, and HOLD on the same captured frame. An inferred empty
+HOLD rectangle needs especially careful review. Existing unrelated config values
+are preserved and a local backup is made.
+
+Verify recognition before starting the overlay:
 
 ```powershell
+python inspect_v4.py
+```
+
+It should print readable NEXT and HOLD results. Diagnostic crops stay local and
+are excluded from Git.
+
+The older separate calibrators remain available if needed:
+
+```powershell
+python calibrate.py --monitor 1
 python calibrate_queue.py
-```
-
-Draw a tight rectangle around all vertically stacked NEXT piece icons, excluding
-the NEXT label and other colored UI. Enter the number of visible preview slots
-(normally five). You may then select the HOLD piece, or press Escape to skip it.
-
-Verify the preview reader before starting the overlay:
-
-```powershell
 python inspect_queue.py
 ```
-
-It should print all NEXT identities instead of `UNREADABLE`. The diagnostic
-saves `debug_queue.png` locally; the file is excluded from Git.
 
 ## Run
 
@@ -83,8 +83,8 @@ not match the game, correct the crop in `config.json` or experiment with the
 three thresholds. Do not share captured screenshots that contain private
 information.
 
-For NEXT/HOLD problems, rerun `python inspect_queue.py`. Recalibrate after
-moving or resizing the game window, and use the default colored preview skin.
+For NEXT/HOLD problems, rerun `python inspect_v4.py`. Recalibrate after moving
+or resizing the game window, and use the default colored preview skin.
 
 ## Tests
 
@@ -103,17 +103,18 @@ python -m pytest -q
   bumpiness, wells, and row transitions. It is not provably optimal.
 - Reads the 10×20 playfield plus four capture rows above it so a complete
   tetromino can be recognized before it enters the visible board.
-- Reads the colored NEXT queue and can optionally track HOLD. A greyed-out HOLD
-  icon may be unreadable, and queue tracking intentionally waits for a confirmed
-  shift instead of guessing the initial current piece.
+- Reads each colored NEXT preview from its own rectangle. HOLD identity persists
+  when its icon dims, while hold availability is tracked separately. Queue
+  tracking intentionally waits for a confirmed shift instead of guessing the
+  initial current piece.
 - Does not yet recognize gray ghost cells or garbage reliably across all themes,
   special skins, spins, or 180° rotations.
 - Suggested routes are collision-checked in a turn-based model, but gravity,
   frame timing, auto-shift charge, and lock delay are not simulated. A legal
   route may still require faster execution than the current game state allows.
-- Detects an active piece as the uppermost **isolated four-cell colored group**.
-  If a piece touches a locked group of the same color, lies partly offscreen,
-  or the skin is unusual, it intentionally suspends suggestions or may err.
+- Fits the queue-identified active shape against the board and can tolerate one
+  missing or misclassified cell when recent pose evidence resolves ambiguity.
+  It suspends suggestions when position or rotation is not sufficiently clear.
 - HUD animation, flashing lines, bloom, scaling, custom shaders, DPI and
   multi-monitor geometry can affect reliability. Test carefully.
 - A Windows display-affinity flag attempts to hide the overlay from MSS

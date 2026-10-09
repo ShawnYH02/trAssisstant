@@ -17,8 +17,9 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from tetris_core import read_cells, occupied_without_active, shift_active
 from solver_v2 import find_best_v2, describe_action_v2
-from queue_first import (QueueTracker, UNOBSERVED, find_active_matching,
-                         read_hold_piece, read_next_queue)
+from queue_first import read_next_queue
+from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
+                       read_queue_rois)
 
 
 class Overlay(QWidget):
@@ -108,15 +109,31 @@ def main():
               "top": int(cfg["top"] - spawn_pixels),
               "width": int(cfg["width"]),
               "height": int(cfg["height"] + spawn_pixels)}
-    tracker = QueueTracker(stable_frames=max(1, int(cfg.get("queue_stable_frames", 3))))
+    tracker = PieceTrackerV4(
+        stable_frames=max(1, int(cfg.get("queue_stable_frames", 3))))
+    next_rois = cfg.get("next_piece_rois") or []
     queue_roi = cfg.get("next_queue_roi")
     hold_roi = cfg.get("hold_piece_roi")
     queue_slots = int(cfg.get("next_queue_slots", 5))
+    previous_active = None
+    previous_name = None
+    previous_queue = None
+    if next_rois:
+        lefts = [roi["left"] for roi in next_rois]
+        tops = [roi["top"] for roi in next_rois]
+        rights = [roi["left"] + roi["width"] for roi in next_rois]
+        bottoms = [roi["top"] + roi["height"] for roi in next_rois]
+        hud_box = {"left": int(min(lefts)), "top": int(min(tops)),
+                   "width": int(max(rights) - min(lefts)),
+                   "height": int(max(bottoms) - min(tops))}
+    else:
+        hud_box = None
     timer = QTimer()
     shutdown_timer = QTimer()
     stop_requested = threading.Event()
 
     def tick():
+        nonlocal previous_active, previous_name, previous_queue
         try:
             screenshot = np.asarray(capture.grab(region))
             labels = read_cells(screenshot,
@@ -124,37 +141,57 @@ def main():
                                 value_min=cfg.get("value_min", 70),
                                 gray_value_min=cfg.get("gray_value_min", 108),
                                 rows=20 + spawn_rows)
-            if queue_roi is None:
+            if not next_rois and queue_roi is None:
                 overlay.target = None
-                overlay.text = "NEXT not calibrated: run python calibrate_queue.py"
-                overlay.subtitle = "Board calibration is preserved; NEXT needs its own crop"
+                overlay.text = "NEXT not calibrated: run python calibrate_all.py"
+                overlay.subtitle = "Confirm BOARD, individual NEXT pieces, and HOLD"
             else:
-                next_image = np.asarray(capture.grab(queue_roi))
-                upcoming = read_next_queue(
-                    next_image, slots=queue_slots,
-                    saturation_min=cfg.get("queue_saturation_min", 95),
-                    value_min=cfg.get("queue_value_min", 90),
-                    min_pixels=cfg.get("queue_min_pixels", 12))
-                held = (read_hold_piece(
+                if next_rois:
+                    upcoming = read_queue_rois(
+                        np.asarray(capture.grab(hud_box)), next_rois,
+                        (hud_box["left"], hud_box["top"]),
+                        saturation_min=cfg.get("queue_saturation_min", 70),
+                        value_min=cfg.get("queue_value_min", 60))
+                else:
+                    upcoming = read_next_queue(
+                        np.asarray(capture.grab(queue_roi)), slots=queue_slots,
+                        saturation_min=cfg.get("queue_saturation_min", 95),
+                        value_min=cfg.get("queue_value_min", 90),
+                        min_pixels=cfg.get("queue_min_pixels", 12))
+                hold_view = (read_hold_view(
                     np.asarray(capture.grab(hold_roi)),
-                    saturation_min=cfg.get("queue_saturation_min", 95),
-                    value_min=cfg.get("queue_value_min", 90),
-                    min_pixels=cfg.get("queue_min_pixels", 12))
-                    if hold_roi is not None else UNOBSERVED)
-                current = tracker.observe(upcoming, held)
+                    previous=tracker.hold, proposed_current=tracker.current,
+                    saturation_min=cfg.get("queue_saturation_min", 85),
+                    value_min=cfg.get("queue_value_min", 75))
+                    if hold_roi is not None else None)
+                current = tracker.observe(upcoming, hold_view)
                 queue_text = " ".join(tracker.queue or ()) or "unreadable"
-                if current is None:
+                if upcoming is None:
+                    overlay.target = None
+                    overlay.text = "NEXT preview unreadable; advice paused"
+                    overlay.subtitle = f"Last stable NEXT: {queue_text}"
+                    previous_active = None
+                    previous_name = None
+                elif current is None:
                     overlay.target = None
                     overlay.text = tracker.status
-                    overlay.subtitle = f"NEXT: {queue_text} | CURRENT unknown"
+                    overlay.subtitle = (f"NEXT: {queue_text} | "
+                                        f"HOLD: {tracker.hold or 'empty'}")
+                    previous_active = None
+                    previous_name = None
                 else:
-                    active = find_active_matching(labels, current)
+                    if previous_name != current or previous_queue != tracker.queue:
+                        previous_active = None
+                    active = locate_expected_piece(labels, current, previous_active)
+                    previous_queue = tracker.queue
+                    previous_name = current
                     if active is None:
                         overlay.target = None
-                        overlay.text = f"CURRENT={current} | cannot locate four cells"
-                        overlay.subtitle = (f"NEXT: {queue_text} | identity known; "
-                                            "pose not visible")
+                        overlay.text = f"CURRENT={current} | pose not confidently visible"
+                        overlay.subtitle = "Tolerant 3-of-4 detection; check board crop/theme"
+                        previous_active = None
                     else:
+                        previous_active = active
                         active = shift_active(active, -spawn_rows)
                         visible_labels = labels[spawn_rows:].copy()
                         stack = occupied_without_active(visible_labels, active)
@@ -166,9 +203,11 @@ def main():
                         else:
                             overlay.target = best.cells
                             overlay.text = describe_action_v2(active, best)
-                            overlay.subtitle = (f"NEXT: {queue_text} | "
-                                                f"score {best.score:.1f} | "
-                                                f"{best.cleared} lines")
+                            cooldown = ("ready" if tracker.can_hold else
+                                        "used" if tracker.can_hold is False else "?")
+                            overlay.subtitle = (f"HOLD: {tracker.hold or 'empty'} "
+                                                f"({cooldown}) | NEXT: {queue_text} | "
+                                                f"score {best.score:.1f}")
             overlay.update()
         except Exception as exc:
             overlay.target = None

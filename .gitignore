@@ -8,7 +8,12 @@ __pycache__/
 config.json
 debug_board.png
 debug_queue.png
+debug_v4_next.png
+debug_v4_hold.png
 captures/
+
+# Local calibration backups
+config.json.*.bak
 
 # Local secrets and logs
 .env
