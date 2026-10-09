@@ -79,12 +79,27 @@ tracker first stabilizes the NEXT queue, then needs one normal placement and a
 confirmed queue shift before it can identify CURRENT. If the queue changes too
 quickly or unexpectedly, advice is suspended until tracking resynchronizes.
 
-The V6 solver runs on a background worker so capture and Ctrl+C remain
-responsive. Its default target is depth 5 with a 250 ms budget; the HUD reports
+The solver runs on a background worker so capture and Ctrl+C remain responsive.
+Its default target is depth 5 with a 250 ms budget; the HUD reports
 the depth actually completed and elapsed search time. Tune `search_depth`,
-`beam_width`, and `search_budget_ms` in `config.json` if needed. For an offline
-comparison against V5, run `python benchmark_v6.py`; `selfplay_v6.py` provides
-a longer same-bag offline simulation.
+`beam_width`, and `search_budget_ms` in `config.json` if needed.
+
+## Optional native V7 solver
+
+V7 uses a dependency-free Rust executable for reachable future-piece search.
+If Cargo is installed, build and verify it with:
+
+```powershell
+cargo build --release --manifest-path native_v7\Cargo.toml
+cargo test --manifest-path native_v7\Cargo.toml
+python smoke_v7.py
+```
+
+On the next launch, the overlay detects
+`native_v7\target\release\trassist-v7.exe` and enables V7 automatically. If it
+is absent, the overlay prints a notice and safely continues with the tested V6
+solver. `benchmark_v7.py` compares V6/V7 on deterministic bags after the native
+binary is built.
 
 ## Troubleshooting recognition
 
@@ -114,6 +129,9 @@ python -m pytest -q
 - V6 preserves diverse first-move candidates, caps continuations per parent,
   rewards perfect clears, and evaluates nonlinear height danger, buried holes,
   transitions, roughness, and accessible wells.
+- Native V7 extends future-piece search to collision-checked BFS with 90°
+  SRS-style kicks. Python still supplies the exact reachable CURRENT routes and
+  HOLD roots, while Rust selects among them using deeper continuations.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
@@ -134,6 +152,9 @@ python -m pytest -q
   approximation rather than an exact attack simulator.
 - Offline benchmark/self-play metrics are heuristic comparisons, not evidence
   of multiplayer strength or parity with mature Tetris engines.
+- V7 requires a locally built Rust executable and starts one native process per
+  decision. It intentionally falls back to V6 in the overlay when unbuilt;
+  V7-specific benchmarks fail instead of silently substituting another engine.
 - Fits the queue-identified active shape against the board and can tolerate one
   missing or misclassified cell when recent pose evidence resolves ambiguity.
   It suspends suggestions when position or rotation is not sufficiently clear.

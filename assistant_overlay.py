@@ -18,6 +18,8 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from tetris_core import read_cells, occupied_without_active, shift_active
 from solver_v6 import SearchSettingsV6, describe_action_v6, find_best_v6
+from solver_v7 import (SearchSettingsV7, describe_action_v7, find_best_v7,
+                       native_path)
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
                        read_queue_region, read_queue_rois)
@@ -130,11 +132,26 @@ def main():
                    "height": int(max(bottoms) - min(tops))}
     else:
         hud_box = None
-    search_settings = SearchSettingsV6(
-        depth=int(cfg.get("search_depth", 5)),
-        beam_width=int(cfg.get("beam_width", 24)),
-        time_budget_ms=float(cfg.get("search_budget_ms", 250)),
-        allow_hold=bool(cfg.get("search_allow_hold", True)))
+    native_enabled = native_path().is_file()
+    if native_enabled:
+        search_settings = SearchSettingsV7(
+            depth=int(cfg.get("search_depth", 5)),
+            beam_width=int(cfg.get("beam_width", 36)),
+            time_budget_ms=float(cfg.get("search_budget_ms", 250)),
+            allow_hold=bool(cfg.get("search_allow_hold", True)))
+        solve_function = find_best_v7
+        describe_function = describe_action_v7
+        overlay.subtitle = "Solver V7 native / reachable future search"
+    else:
+        search_settings = SearchSettingsV6(
+            depth=int(cfg.get("search_depth", 5)),
+            beam_width=int(cfg.get("beam_width", 24)),
+            time_budget_ms=float(cfg.get("search_budget_ms", 250)),
+            allow_hold=bool(cfg.get("search_allow_hold", True)))
+        solve_function = find_best_v6
+        describe_function = describe_action_v6
+        overlay.subtitle = "Solver V6 fallback / build native_v7 for V7"
+        print(f"Native V7 engine not built; using V6 fallback. Expected: {native_path()}")
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
     solver_future = None
@@ -228,7 +245,7 @@ def main():
                         if result_key != state_key and solver_future is None:
                             pending_key = state_key
                             solver_future = solver_pool.submit(
-                                find_best_v6, stack.copy(), active,
+                                solve_function, stack.copy(), active,
                                 tuple(tracker.queue or ()), tracker.hold,
                                 tracker.can_hold, search_settings)
                         best = result if result_key == state_key else None
@@ -243,7 +260,7 @@ def main():
                             overlay.subtitle = tracker.status
                         else:
                             overlay.target = best.cells
-                            overlay.text = describe_action_v6(active, best)
+                            overlay.text = describe_function(active, best)
                             cooldown = ("ready" if tracker.can_hold else
                                         "used" if tracker.can_hold is False else "?")
                             overlay.subtitle = (f"HOLD: {tracker.hold or 'empty'} "

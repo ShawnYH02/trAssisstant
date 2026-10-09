@@ -1,0 +1,14 @@
+[package]
+name = "trassist-v7"
+version = "0.1.0"
+edition = "2021"
+description = "Offline S1-style Tetris search backend for trAssisstant"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[dependencies]

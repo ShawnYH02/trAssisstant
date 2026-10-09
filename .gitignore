@@ -16,6 +16,9 @@ captures/
 config.json.*.bak
 assistant_overlay.py.*.bak
 
+# Native build output
+native_v7/target/
+
 # Local secrets and logs
 .env
 .env.*
