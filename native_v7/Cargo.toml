@@ -1,8 +1,8 @@
 [package]
 name = "trassist-v7"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "Offline V9 pattern-guided Tetris search backend for trAssisstant"
+description = "Offline V11 tactical Tetris search backend for trAssisstant"
 license = "MIT"
 
 [profile.release]

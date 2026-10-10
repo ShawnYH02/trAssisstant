@@ -223,8 +223,8 @@ def main():
             allow_hold=bool(cfg.get("search_allow_hold", True)))
         solve_function = find_best_v7
         describe_function = describe_action_v7
-        overlay.subtitle = "Solver V9 native / pattern-guided reachable search"
-        print(f"Native V9 engine enabled: {native_path()}")
+        overlay.subtitle = "Solver V11 native / confirmed tactical TSD search"
+        print(f"Native V11 engine enabled: {native_path()}")
     else:
         search_settings = SearchSettingsV6(
             depth=int(cfg.get("search_depth", 5)),
@@ -234,7 +234,7 @@ def main():
         solve_function = find_best_v6
         describe_function = describe_action_v6
         overlay.subtitle = "Solver V6 fallback / build native_v7 for V7"
-        print(f"Native V9 engine not built; using V6 fallback. Expected: {native_path()}")
+        print(f"Native V11 engine not built; using V6 fallback. Expected: {native_path()}")
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
     plan_memory = PlanMemory()

@@ -91,11 +91,12 @@ queue, and HOLD transition before promoting the next ghost immediately while a
 fresh background search replenishes the plan. Unexpected transitions discard
 the cached preview and trigger normal replanning.
 
-## Optional native V9 solver
+## Optional native V11 solver
 
-V9 uses a dependency-free Rust executable for reachable future-piece search
-with queue-aware structural pattern hints. These hints guide planning but do
-not assert that a named setup is executable.
+V11 uses a dependency-free Rust executable for reachable future-piece search.
+It retains queue-aware structural hints and adds bounded tactical proof for
+reachable full T-spin Doubles when T is immediate, held, or one known piece
+away. Only movement-verified proofs receive the tactical priority bonus.
 If Cargo is installed, build and verify it with:
 
 ```powershell
@@ -105,9 +106,9 @@ python smoke_v7.py
 ```
 
 On the next launch, the overlay detects
-`native_v7\target\release\trassist-v7.exe` and enables V9 automatically. If it
+`native_v7\target\release\trassist-v7.exe` and enables V11 automatically. If it
 is absent, the overlay prints a notice and safely continues with the tested V6
-solver. The executable name remains V7-compatible. Use `benchmark_v9.py` for
+solver. The executable name remains V7-compatible. Use `benchmark_native.py` for
 side-by-side latency/depth measurement against a saved native baseline.
 
 ## Troubleshooting recognition
@@ -138,12 +139,15 @@ python -m pytest -q
 - V6 preserves diverse first-move candidates, caps continuations per parent,
   rewards perfect clears, and evaluates nonlinear height danger, buried holes,
   transitions, roughness, and accessible wells.
-- Native V9 extends future-piece search to collision-checked BFS with 90°
+- Native V11 extends future-piece search to collision-checked BFS with 90°
   SRS-style kicks. Python still supplies the exact reachable CURRENT routes and
   HOLD roots, while Rust selects among them using deeper continuations.
-- V9's T-slot, Kaidan-like, STMB-like, and STSD-like scores are structural
+- Its T-slot, Kaidan-like, STMB-like, and STSD-like scores are structural
   search hints, not guarantees that a named setup or spin is executable. Actual
   attack credit still requires the native movement search to produce a spin.
+- V11 temporarily prioritizes branches only after its bounded native movement
+  search proves a reachable full T-spin Double. Negative probes can still miss
+  180-kick, gravity-timed, or deeper tactical continuations.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
@@ -167,7 +171,7 @@ python -m pytest -q
   approximation rather than an exact attack simulator.
 - Offline benchmark/self-play metrics are heuristic comparisons, not evidence
   of multiplayer strength or parity with mature Tetris engines.
-- V9 requires a locally built Rust executable and starts one native process per
+- V11 requires a locally built Rust executable and starts one native process per
   decision. It intentionally falls back to V6 in the overlay when unbuilt;
   native-specific benchmarks fail instead of silently substituting another engine.
 - Fits the queue-identified active shape against the board and can tolerate one

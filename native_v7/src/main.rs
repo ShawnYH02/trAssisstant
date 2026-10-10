@@ -1,7 +1,8 @@
-//! V9 pattern-guided strategy engine. No screen capture, network, or game input.
+//! V11 tactical strategy engine. No screen capture, network, or game input.
 //! The wire protocol remains compatible with V7 clients.
 use std::collections::{HashMap, HashSet, VecDeque};
 mod v9_patterns; // V9 pattern-guided search
+mod v11_tactical; // V11 confirmed tactical TSD
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
 
@@ -282,8 +283,8 @@ fn board_value(rows: &Board) -> f64 {
     }
     let danger=(maxh-12.0).max(0.0);
     let emergency=(maxh-16.0).max(0.0);
-    - 6.8*holes - 0.9*covers - 0.21*row_trans
-        - 0.19*rough - 0.026*(aggregate as f64)
+    - 5.2*holes - 1.4*covers - 0.16*row_trans
+        - 0.14*rough - 0.012*(aggregate as f64)
         - 0.45*danger*danger - 3.0*emergency*emergency + well_reward
 }
 fn reward(lines: u8, spin: Spin, b2b: u16, combo: i16, perfect_clear: bool) -> (f64,u16,i16) {
@@ -354,6 +355,8 @@ fn search(request: Request) -> SearchResult {
     let start=Instant::now();
     let deadline=start+Duration::from_millis(request.budget_ms.max(20));
     let mut cache: HashMap<Board,(f64,v9_patterns::Hints)>=HashMap::new();
+    let mut tactical = v11_tactical::ProofCache::default();
+    let tactical_deadline = start + Duration::from_millis((request.budget_ms/3).clamp(20,90));
     let mut all = Vec::new();
     let mut expanded=0;
     for r in request.roots.iter() {
@@ -367,6 +370,7 @@ fn search(request: Request) -> SearchResult {
             third_name:'-',third_cells:[(0,0);4]});
         expanded+=1;
     }
+    v11_tactical::prioritize(&mut all, &request.next, &mut tactical, 16, 3, tactical_deadline, &cache);
     let mut beam=prune(all,request.beam,request.beam.min(12));
     let mut best=beam[0].clone();
     let mut depth_reached=1;
@@ -394,6 +398,8 @@ fn search(request: Request) -> SearchResult {
                     expanded+=1;
                 }
             }
+            local.sort_by(|a,b| b.estimate.total_cmp(&a.estimate));
+            v11_tactical::prioritize(&mut local, &request.next, &mut tactical, 3, 0, tactical_deadline, &cache);
             local.sort_by(|a,b| b.estimate.total_cmp(&a.estimate));
             // V9: preserve seven best continuations plus up to two genuine
             // positive pattern-progress branches. Never reward a pattern
@@ -463,7 +469,7 @@ fn handle_request(line: &str) -> String {
 }
 fn main() {
     if std::env::args().any(|arg| arg == "--version") {
-        println!("trassist-v9 0.2.0 (pattern-guided; S1-inspired; SRS 90; no 180 kicks)");
+        println!("trassist-v11 0.3.0 (confirmed TSD priority; S1-inspired; SRS 90; no 180 kicks)");
         return;
     }
     let stdin = io::stdin();
