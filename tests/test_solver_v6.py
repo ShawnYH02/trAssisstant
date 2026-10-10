@@ -55,6 +55,16 @@ def test_depth_and_hold():
     assert answer.name in ('T','Z')
     assert answer.actions[-1] == 'Hard drop'
     assert answer.elapsed_ms > 0
+    assert answer.next_name in {'I','L','J','S','O','T','Z'}
+    assert answer.next_cells is not None
+    after_first = v5.lock(to_rows(b), answer.cells)
+    assert after_first is not None
+    assert v5.lock(after_first[0], answer.next_cells) is not None
+    after_second = v5.lock(after_first[0], answer.next_cells)
+    assert after_second is not None
+    assert answer.third_name in {'I','L','J','S','O','T','Z'}
+    assert answer.third_cells is not None
+    assert v5.lock(after_second[0], answer.third_cells) is not None
 
 
 def test_no_hold_when_cooldown():

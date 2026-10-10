@@ -25,11 +25,29 @@ from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
                        read_queue_region, read_queue_rois)
 
 
+GHOST_COLORS = {
+    "I": (35, 220, 235),
+    "O": (245, 210, 40),
+    "T": (175, 80, 225),
+    "S": (65, 205, 90),
+    "Z": (235, 65, 70),
+    "J": (65, 105, 230),
+    "L": (245, 145, 35),
+}
+
+
 class Overlay(QWidget):
     def __init__(self, config):
         super().__init__()
         self.cfg = config
+        self.physical_monitor, self.board_screen = self._find_board_screen()
+        self.screen_scale = float(self.board_screen.devicePixelRatio())
         self.target = None
+        self.target_name = None
+        self.next_target = None
+        self.next_target_name = None
+        self.third_target = None
+        self.third_target_name = None
         self.text = "Looking for a complete falling tetromino..."
         self.subtitle = "Solver V6 / root-diverse lookahead / collision-checked CURRENT"
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
@@ -38,9 +56,66 @@ class Overlay(QWidget):
                             Qt.WindowType.WindowTransparentForInput)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setGeometry(QApplication.primaryScreen().virtualGeometry())
+        # Keep this top-level window wholly on the board's screen. A desktop-wide
+        # Qt window is rendered at one device-pixel ratio, which offsets drawings
+        # when Windows monitors use different display scaling percentages.
+        self.setGeometry(self.board_screen.geometry())
         self.show()
+        if self.windowHandle() is not None:
+            self.windowHandle().setScreen(self.board_screen)
+            self.setGeometry(self.board_screen.geometry())
         self.exclude_from_capture()
+
+        left, top, width, height = self.board_geometry()
+        print(f"Overlay mapped to {self.board_screen.name()}: "
+              f"board=({left:.1f}, {top:.1f}, {width:.1f}, {height:.1f}), "
+              f"scale={self.screen_scale:.2f}")
+
+    def _find_board_screen(self):
+        """Match the physical MSS monitor containing the board to a Qt screen."""
+        center_x = self.cfg["left"] + self.cfg["width"] / 2
+        center_y = self.cfg["top"] + self.cfg["height"] / 2
+        with MSS() as capture:
+            monitors = [dict(monitor) for monitor in capture.monitors[1:]]
+        monitor = next(
+            (item for item in monitors
+             if (item["left"] <= center_x < item["left"] + item["width"] and
+                 item["top"] <= center_y < item["top"] + item["height"])),
+            None)
+        if monitor is None:
+            raise ValueError("Calibrated board is outside the current monitor layout")
+
+        def match_score(screen):
+            geometry = screen.geometry()
+            scale = float(screen.devicePixelRatio())
+            physical_width = round(geometry.width() * scale)
+            physical_height = round(geometry.height() * scale)
+            return (abs(geometry.x() - monitor["left"]) +
+                    abs(geometry.y() - monitor["top"]) +
+                    abs(physical_width - monitor["width"]) +
+                    abs(physical_height - monitor["height"]))
+
+        screens = QApplication.instance().screens()
+        if not screens:
+            raise RuntimeError("Qt did not report any screens")
+        return monitor, min(screens, key=match_score)
+
+    def board_geometry(self):
+        """Return the physical board rectangle in this screen's Qt coordinates."""
+        scale = self.screen_scale
+        monitor = self.physical_monitor
+        return ((self.cfg["left"] - monitor["left"]) / scale,
+                (self.cfg["top"] - monitor["top"]) / scale,
+                self.cfg["width"] / scale,
+                self.cfg["height"] / scale)
+
+    def clear_targets(self):
+        self.target = None
+        self.target_name = None
+        self.next_target = None
+        self.next_target_name = None
+        self.third_target = None
+        self.third_target_name = None
 
     def exclude_from_capture(self):
         """Best effort: omit overlay from Windows screen captures (Win 10 2004+)."""
@@ -57,20 +132,34 @@ class Overlay(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        left = self.cfg["left"] - self.x()
-        top = self.cfg["top"] - self.y()
-        cw = self.cfg["width"] / 10
-        ch = self.cfg["height"] / 20
-        if self.target is not None:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(0, 255, 212, 245), max(2.0, min(cw, ch) * 0.10)))
-            for x, y in self.target:
-                painter.drawRoundedRect(QRectF(left + x*cw + 2, top + y*ch + 2,
-                                                cw - 4, ch - 4), 2, 2)
+        left, top, width, height = self.board_geometry()
+        cw = width / 10
+        ch = height / 20
+        # Draw later projections first so the immediate move remains clearest
+        # where planned placements overlap.
+        ghosts = ((self.third_target_name, self.third_target,
+                   Qt.PenStyle.DotLine, 4),
+                  (self.next_target_name, self.next_target,
+                   Qt.PenStyle.DashLine, 3),
+                  (self.target_name, self.target,
+                   Qt.PenStyle.SolidLine, 2))
+        for name, cells, line_style, inset in ghosts:
+            if cells is None:
+                continue
+            red, green, blue = GHOST_COLORS.get(name, (220, 235, 240))
+            painter.setBrush(QColor(red, green, blue, 25))
+            pen = QPen(QColor(red, green, blue, 245),
+                       max(2.0, min(cw, ch) * 0.09))
+            pen.setStyle(line_style)
+            painter.setPen(pen)
+            for x, y in cells:
+                painter.drawRoundedRect(
+                    QRectF(left + x*cw + inset, top + y*ch + inset,
+                           cw - 2*inset, ch - 2*inset), 2, 2)
         # Keep text outside both the playfield and the extra spawn-row capture.
-        spawn_height = self.cfg["height"] / 20 * self.cfg.get("spawn_rows", 4)
+        spawn_height = height / 20 * self.cfg.get("spawn_rows", 4)
         label_y = (top - spawn_height - 63 if top >= spawn_height + 67
-                   else top + self.cfg["height"] + 8)
+                   else top + height + 8)
         label_y = max(0, min(label_y, self.height()-57))
         label_width = min(620, self.width())
         label_x = max(0, min(left, self.width() - label_width))
@@ -88,17 +177,9 @@ class Overlay(QWidget):
         painter.end()
 
 
-def dpi_awareness():
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except (AttributeError, OSError):
-        pass
-
-
 def main():
     if sys.platform != "win32":
         raise SystemExit("This overlay starter targets Windows only.")
-    dpi_awareness()
     path = Path("config.json")
     if not path.exists():
         raise SystemExit("Missing config.json. Run 'python calibrate.py' first.")
@@ -174,7 +255,7 @@ def main():
                                 gray_value_min=cfg.get("gray_value_min", 108),
                                 rows=20 + spawn_rows)
             if next_region is None and not next_rois and queue_roi is None:
-                overlay.target = None
+                overlay.clear_targets()
                 overlay.text = "NEXT not calibrated: run python calibrate_all.py"
                 overlay.subtitle = "Confirm BOARD, individual NEXT pieces, and HOLD"
             else:
@@ -204,13 +285,13 @@ def main():
                 current = tracker.observe(upcoming, hold_view)
                 queue_text = " ".join(tracker.queue or ()) or "unreadable"
                 if upcoming is None:
-                    overlay.target = None
+                    overlay.clear_targets()
                     overlay.text = "NEXT preview unreadable; advice paused"
                     overlay.subtitle = f"Last stable NEXT: {queue_text}"
                     previous_active = None
                     previous_name = None
                 elif current is None:
-                    overlay.target = None
+                    overlay.clear_targets()
                     overlay.text = tracker.status
                     overlay.subtitle = (f"NEXT: {queue_text} | "
                                         f"HOLD: {tracker.hold or 'empty'}")
@@ -223,7 +304,7 @@ def main():
                     previous_queue = tracker.queue
                     previous_name = current
                     if active is None:
-                        overlay.target = None
+                        overlay.clear_targets()
                         overlay.text = f"CURRENT={current} | pose not confidently visible"
                         overlay.subtitle = "Tolerant 3-of-4 detection; check board crop/theme"
                         previous_active = None
@@ -251,27 +332,57 @@ def main():
                                 tracker.can_hold, search_settings)
                         best = result if result_key == state_key else None
                         if result_key != state_key:
-                            overlay.target = None
+                            overlay.clear_targets()
                             overlay.text = f"CURRENT={current} | planning lookahead..."
                             overlay.subtitle = (f"NEXT: {queue_text} | "
                                                 "capture remains responsive")
                         elif best is None:
-                            overlay.target = None
+                            overlay.clear_targets()
                             overlay.text = f"CURRENT={current} | no reachable placement"
                             overlay.subtitle = tracker.status
+                        elif any(x < 0 or x >= 10 or y < 0 or y >= 20
+                                 for x, y in best.cells):
+                            overlay.clear_targets()
+                            overlay.text = "Solver returned an out-of-board placement"
+                            overlay.subtitle = f"Suppressed cells: {best.cells}"
                         else:
                             overlay.target = best.cells
+                            overlay.target_name = best.name
+                            next_cells = best.next_cells
+                            if (next_cells is not None and
+                                    all(0 <= x < 10 and 0 <= y < 20
+                                        for x, y in next_cells)):
+                                overlay.next_target = next_cells
+                                overlay.next_target_name = best.next_name
+                            else:
+                                overlay.next_target = None
+                                overlay.next_target_name = None
+                            third_cells = best.third_cells
+                            if (third_cells is not None and
+                                    all(0 <= x < 10 and 0 <= y < 20
+                                        for x, y in third_cells)):
+                                overlay.third_target = third_cells
+                                overlay.third_target_name = best.third_name
+                            else:
+                                overlay.third_target = None
+                                overlay.third_target_name = None
                             overlay.text = describe_function(active, best)
                             cooldown = ("ready" if tracker.can_hold else
                                         "used" if tracker.can_hold is False else "?")
+                            plan_names = [name for name in
+                                          (best.name, best.next_name,
+                                           best.third_name) if name]
+                            plan = (f" | PLAN: {' > '.join(plan_names)}"
+                                    if len(plan_names) > 1 else "")
                             overlay.subtitle = (f"HOLD: {tracker.hold or 'empty'} "
                                                 f"({cooldown}) | NEXT: {queue_text} | "
                                                 f"D{best.depth_used} / "
                                                 f"{best.elapsed_ms:.0f}ms | "
-                                                f"score {best.score:.1f}")
+                                                f"score {best.score:.1f}"
+                                                f"{plan}")
             overlay.update()
         except Exception as exc:
-            overlay.target = None
+            overlay.clear_targets()
             overlay.text = f"Capture error: {type(exc).__name__}"
             overlay.subtitle = str(exc)[:80]
             overlay.update()

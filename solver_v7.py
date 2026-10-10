@@ -102,18 +102,40 @@ def find_best_v7(board: np.ndarray, active, next_queue=(), hold=None, can_hold=F
     if not output or not output[0].startswith('OK '):
         raise RuntimeError('V7 solver error: ' + (output[0] if output else result.stderr[:300]))
     fields = output[0].split()
-    if len(fields) != 6:
+    if not 6 <= len(fields) <= 8:
         raise RuntimeError('Malformed native response: ' + output[0])
-    _, root_id, score, depth, nodes, _engine_ms = fields
+    _, root_id, score, depth, nodes, _engine_ms, *future = fields
     root_id = int(root_id)
     if not 0 <= root_id < len(roots):
         raise RuntimeError('Native solver returned an invalid root ID')
     move, uses_hold, _, _ = roots[root_id]
+    next_name = None
+    next_cells = None
+    third_name = None
+    third_cells = None
+
+    def parse_future(encoded):
+        try:
+            name, encoded_cells = encoded.split(':', 1)
+            parsed_cells = tuple(tuple(map(int, cell.split(',')))
+                                 for cell in encoded_cells.split(';'))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError('Malformed native future placement: ' + encoded) from exc
+        if name not in v5.PIECES or len(parsed_cells) != 4:
+            raise RuntimeError('Native solver returned an invalid future placement')
+        return name, parsed_cells
+
+    if future and future[0] != '-':
+        next_name, next_cells = parse_future(future[0])
+    if len(future) > 1 and future[1] != '-':
+        third_name, third_cells = parse_future(future[1])
     actions = (('HOLD',) if uses_hold else ()) + move.actions
     return RecommendationV5(move.name, move.r, move.x, move.y, move.cells,
                             float(score), move.lines, actions, visited, move.spin,
                             int(depth), int(nodes), (time.perf_counter()-start)*1000,
-                            uses_hold, 0)
+                            uses_hold, 0, next_name=next_name,
+                            next_cells=next_cells, third_name=third_name,
+                            third_cells=third_cells)
 
 
 def describe_action_v7(active, best):

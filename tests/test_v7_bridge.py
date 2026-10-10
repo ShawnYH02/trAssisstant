@@ -50,7 +50,10 @@ def test_fake_native_reply_selects_exact_root(monkeypatch,tmp_path):
     def fake_run(argv,**kw):
         assert argv==[str(fake)]
         assert kw['input'].startswith('V7 ')
-        return SimpleNamespace(stdout=f'OK {intended} 121.0 5 900 57\n',stderr='')
+        return SimpleNamespace(
+            stdout=(f'OK {intended} 121.0 5 900 57 '
+                    'I:0,19;1,19;2,19;3,19 O:8,18;9,18;8,19;9,19\n'),
+            stderr='')
     monkeypatch.setattr(v7.subprocess,'run',fake_run)
     best=v7.find_best_v7(board,active,next_queue=['I','S','Z'],can_hold=True)
     assert best.name==roots[intended][0].name
@@ -58,6 +61,22 @@ def test_fake_native_reply_selects_exact_root(monkeypatch,tmp_path):
     assert best.actions[0]=='HOLD'
     assert best.depth_used==5
     assert best.nodes_expanded==900
+    assert best.next_name=='I'
+    assert best.next_cells==((0,19),(1,19),(2,19),(3,19))
+    assert best.third_name=='O'
+    assert best.third_cells==((8,18),(9,18),(8,19),(9,19))
+
+
+def test_old_native_reply_without_future_remains_compatible(monkeypatch,tmp_path):
+    board,active,_,_=fixture_roots()
+    fake=tmp_path/'trassist-v7.exe';fake.write_bytes(b'fake')
+    monkeypatch.setattr(v7,'native_path',lambda settings:fake)
+    monkeypatch.setattr(v7.subprocess,'run',lambda *args,**kwargs:
+        SimpleNamespace(stdout='OK 0 1.0 1 10 2\n',stderr=''))
+    best=v7.find_best_v7(board,active,next_queue=['I'])
+    assert best is not None
+    assert best.next_name is None and best.next_cells is None
+    assert best.third_name is None and best.third_cells is None
 
 
 def test_missing_executable_is_clear_error(monkeypatch,tmp_path):

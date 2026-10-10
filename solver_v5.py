@@ -53,6 +53,10 @@ class RecommendationV5:
     elapsed_ms: float = 0.0
     hold_used: bool = False
     b2b_after: int = 0
+    next_name: str | None = None
+    next_cells: tuple[tuple[int, int], ...] | None = None
+    third_name: str | None = None
+    third_cells: tuple[tuple[int, int], ...] | None = None
 
 
 @dataclass(frozen=True)

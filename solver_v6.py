@@ -161,8 +161,17 @@ def _root_node(move, parent, first_hold, next_hold, next_index,
     first = move if parent is None else parent.first
     held = first_hold if parent is None else parent.first_hold
     estimate = reward + board_value(move.board)
-    return v5._Node(move.board, next_index, next_hold, new_b2b,
+    node = v5._Node(move.board, next_index, next_hold, new_b2b,
                     new_combo, reward, first, held, estimate)
+    # Preserve the first future placement along the selected beam path so the
+    # overlay can show an honest two-piece plan, including HOLD semantics.
+    node.second = (None if parent is None else
+                   getattr(parent, "second", None) or move)
+    node.third = (None if parent is None else
+                  getattr(parent, "third", None) or
+                  (move if getattr(parent, "second", None) is not None
+                   else None))
+    return node
 
 
 def find_best_v6(board: np.ndarray, active, next_queue=(), hold=None,
@@ -242,12 +251,18 @@ def find_best_v6(board: np.ndarray, active, next_queue=(), hold=None,
         best = max(nodes, key=lambda n: n.estimate)
         used_depth = d + 1
     m = best.first
+    second = getattr(best, "second", None)
+    third = getattr(best, "third", None)
     actions = (('HOLD',) if best.first_hold else ()) + m.actions
     return RecommendationV5(m.name, m.r, m.x, m.y, m.cells,
                             best.estimate, m.lines, actions, visited,
                             m.spin, used_depth, expanded,
                             (time.perf_counter() - start) * 1000,
-                            best.first_hold, best.b2b)
+                            best.first_hold, best.b2b,
+                            next_name=second.name if second else None,
+                            next_cells=second.cells if second else None,
+                            third_name=third.name if third else None,
+                            third_cells=third.cells if third else None)
 
 
 def describe_action_v6(active, best):

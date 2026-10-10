@@ -23,7 +23,7 @@ struct Pose { x: i8, y: i8, r: u8 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct State { pose: Pose, last_rotation: bool }
 #[derive(Clone, Copy, Debug)]
-struct Lock { board: Board, lines: u8, spin: Spin }
+struct Lock { board: Board, lines: u8, spin: Spin, cells: [(i8,i8);4] }
 
 #[derive(Clone)]
 struct Node {
@@ -35,6 +35,10 @@ struct Node {
     reward: f64,
     estimate: f64,
     root: usize,
+    second_name: char,
+    second_cells: [(i8,i8);4],
+    third_name: char,
+    third_cells: [(i8,i8);4],
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct NodeKey { board: Board, hold: char, index: usize, b2b: u16, combo: i16 }
@@ -45,7 +49,11 @@ struct Request {
     roots: Vec<Root>,
 }
 struct Root { id: usize, board: Board, lines: u8, spin: Spin, hold: char, index: usize }
-struct SearchResult { root: usize, score: f64, depth: usize, nodes: usize, elapsed_ms: u128 }
+struct SearchResult {
+    root: usize, score: f64, depth: usize, nodes: usize, elapsed_ms: u128,
+    second_name: char, second_cells: [(i8,i8);4],
+    third_name: char, third_cells: [(i8,i8);4],
+}
 
 fn valid_piece(p: char) -> bool { matches!(p, 'I'|'O'|'T'|'S'|'Z'|'J'|'L') }
 fn parse_board(s: &str) -> Result<Board, String> {
@@ -201,7 +209,9 @@ fn locks(board: &Board, name: char, max_states: usize) -> Vec<Lock> {
             // Dedup equivalent states, preserving distinct spin classifications.
             let mut canonical = shape;
             canonical.sort_unstable();
-            if dedup.insert((canonical,spin)) { output.push(Lock { board:post, lines, spin }); }
+            if dedup.insert((canonical,spin)) {
+                output.push(Lock { board:post, lines, spin, cells:shape });
+            }
         }
         if seen.len() >= max_states { continue; }
         let p = s.pose;
@@ -292,14 +302,22 @@ fn reward(lines: u8, spin: Spin, b2b: u16, combo: i16, perfect_clear: bool) -> (
     (7.0*attack+0.35*lines as f64+b2b_value+pc_value-break_cost,new_b2b,new_combo)
 }
 
-fn score_next(parent: &Node, mv: Lock, hold: char, idx: usize, depth: usize,
+fn score_next(parent: &Node, mv: Lock, name: char, hold: char, idx: usize, depth: usize,
               cache: &mut HashMap<Board,f64>) -> Node {
     let (gain,b2b,combo)=reward(mv.lines,mv.spin,parent.b2b,parent.combo,mv.board.iter().all(|&r|r==0));
     let discount=0.95f64.powi(depth as i32);
     let total=parent.reward+discount*gain;
     let value=*cache.entry(mv.board).or_insert_with(|| board_value(&mv.board));
+    let (second_name,second_cells,third_name,third_cells)=if parent.second_name=='-' {
+        (name,mv.cells,'-',[(0,0);4])
+    } else if parent.third_name=='-' {
+        (parent.second_name,parent.second_cells,name,mv.cells)
+    } else {
+        (parent.second_name,parent.second_cells,parent.third_name,parent.third_cells)
+    };
     Node { board:mv.board, hold, index:idx, b2b, combo, reward:total,
-        estimate:total+value, root:parent.root }
+        estimate:total+value, root:parent.root, second_name, second_cells,
+        third_name, third_cells }
 }
 fn prune(nodes: Vec<Node>, width: usize, diversity: usize) -> Vec<Node> {
     let mut seen: HashMap<NodeKey,Node> = HashMap::new();
@@ -339,7 +357,9 @@ fn search(request: Request) -> SearchResult {
         let (gain,b2b,combo)=reward(r.lines,r.spin,request.initial_b2b,request.initial_combo,r.board.iter().all(|&v|v==0));
         let value=*cache.entry(r.board).or_insert_with(||board_value(&r.board));
         all.push(Node {board:r.board,hold:r.hold,index:r.index,b2b,combo,
-            reward:gain,estimate:gain+value,root:r.id});
+            reward:gain,estimate:gain+value,root:r.id,
+            second_name:'-',second_cells:[(0,0);4],
+            third_name:'-',third_cells:[(0,0);4]});
         expanded+=1;
     }
     let mut beam=prune(all,request.beam,request.beam.min(12));
@@ -365,7 +385,7 @@ fn search(request: Request) -> SearchResult {
             let mut local=Vec::new();
             for (piece,held,idx) in options {
                 for mv in locks(&parent.board,piece,1100) {
-                    local.push(score_next(parent,mv,held,idx,ply,&mut cache));
+                    local.push(score_next(parent,mv,piece,held,idx,ply,&mut cache));
                     expanded+=1;
                 }
             }
@@ -377,13 +397,33 @@ fn search(request: Request) -> SearchResult {
         best=beam[0].clone();
         depth_reached+=1;
     }
-    SearchResult {root:best.root,score:best.estimate,depth:depth_reached,nodes:expanded,elapsed_ms:start.elapsed().as_millis()}
+    SearchResult {root:best.root,score:best.estimate,depth:depth_reached,
+        nodes:expanded,elapsed_ms:start.elapsed().as_millis(),
+        second_name:best.second_name,second_cells:best.second_cells,
+        third_name:best.third_name,third_cells:best.third_cells}
 }
 fn handle_request(line: &str) -> String {
     match parse_request(line) {
         Ok(req) => {
             let result=search(req);
-            format!("OK {} {:.8} {} {} {}",result.root,result.score,result.depth,result.nodes,result.elapsed_ms)
+            let future=if result.second_name=='-' {
+                "-".to_string()
+            } else {
+                let encoded=result.second_cells.iter()
+                    .map(|(x,y)|format!("{x},{y}"))
+                    .collect::<Vec<_>>().join(";");
+                format!("{}:{encoded}",result.second_name)
+            };
+            let third=if result.third_name=='-' {
+                "-".to_string()
+            } else {
+                let encoded=result.third_cells.iter()
+                    .map(|(x,y)|format!("{x},{y}"))
+                    .collect::<Vec<_>>().join(";");
+                format!("{}:{encoded}",result.third_name)
+            };
+            format!("OK {} {:.8} {} {} {} {} {}",result.root,result.score,
+                result.depth,result.nodes,result.elapsed_ms,future,third)
         }
         Err(err) => format!("ERR {}",err.replace(' ',"_")),
     }
