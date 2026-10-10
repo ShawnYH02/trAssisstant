@@ -1,6 +1,7 @@
-//! V7 offline strategy engine. No screen capture, network, or game input.
-//! One request per line. See protocol described in README_V7.md.
+//! V9 pattern-guided strategy engine. No screen capture, network, or game input.
+//! The wire protocol remains compatible with V7 clients.
 use std::collections::{HashMap, HashSet, VecDeque};
+mod v9_patterns; // V9 pattern-guided search
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
 
@@ -303,11 +304,13 @@ fn reward(lines: u8, spin: Spin, b2b: u16, combo: i16, perfect_clear: bool) -> (
 }
 
 fn score_next(parent: &Node, mv: Lock, name: char, hold: char, idx: usize, depth: usize,
-              cache: &mut HashMap<Board,f64>) -> Node {
+              queue: &[char], cache: &mut HashMap<Board,(f64,v9_patterns::Hints)>) -> Node {
     let (gain,b2b,combo)=reward(mv.lines,mv.spin,parent.b2b,parent.combo,mv.board.iter().all(|&r|r==0));
     let discount=0.95f64.powi(depth as i32);
     let total=parent.reward+discount*gain;
-    let value=*cache.entry(mv.board).or_insert_with(|| board_value(&mv.board));
+    let (base,hints)=*cache.entry(mv.board).or_insert_with(||
+        (board_value(&mv.board),v9_patterns::analyze(&mv.board)));
+    let value=base+v9_patterns::bonus(hints,queue,hold,idx);
     let (second_name,second_cells,third_name,third_cells)=if parent.second_name=='-' {
         (name,mv.cells,'-',[(0,0);4])
     } else if parent.third_name=='-' {
@@ -350,12 +353,14 @@ fn prune(nodes: Vec<Node>, width: usize, diversity: usize) -> Vec<Node> {
 fn search(request: Request) -> SearchResult {
     let start=Instant::now();
     let deadline=start+Duration::from_millis(request.budget_ms.max(20));
-    let mut cache: HashMap<Board,f64>=HashMap::new();
+    let mut cache: HashMap<Board,(f64,v9_patterns::Hints)>=HashMap::new();
     let mut all = Vec::new();
     let mut expanded=0;
     for r in request.roots.iter() {
         let (gain,b2b,combo)=reward(r.lines,r.spin,request.initial_b2b,request.initial_combo,r.board.iter().all(|&v|v==0));
-        let value=*cache.entry(r.board).or_insert_with(||board_value(&r.board));
+        let (base,hints)=*cache.entry(r.board).or_insert_with(||
+            (board_value(&r.board),v9_patterns::analyze(&r.board)));
+        let value=base+v9_patterns::bonus(hints,&request.next,r.hold,r.index);
         all.push(Node {board:r.board,hold:r.hold,index:r.index,b2b,combo,
             reward:gain,estimate:gain+value,root:r.id,
             second_name:'-',second_cells:[(0,0);4],
@@ -385,12 +390,40 @@ fn search(request: Request) -> SearchResult {
             let mut local=Vec::new();
             for (piece,held,idx) in options {
                 for mv in locks(&parent.board,piece,1100) {
-                    local.push(score_next(parent,mv,piece,held,idx,ply,&mut cache));
+                    local.push(score_next(parent,mv,piece,held,idx,ply,&request.next,&mut cache));
                     expanded+=1;
                 }
             }
             local.sort_by(|a,b| b.estimate.total_cmp(&a.estimate));
-            next.extend(local.into_iter().take(9));
+            // V9: preserve seven best continuations plus up to two genuine
+            // positive pattern-progress branches. Never reward a pattern
+            // when no future T is visible in queue or HOLD.
+            let parent_bonus=cache.get(&parent.board).map(|(_,h)|
+                v9_patterns::bonus(*h,&request.next,parent.hold,parent.index)).unwrap_or(0.0);
+            let mut picked: Vec<Node>=local.iter().take(7).cloned().collect();
+            let mut guided: Vec<(f64,usize)>=local.iter().enumerate().skip(7)
+                .filter_map(|(i,n)| {
+                    let hint=cache.get(&n.board)?.1;
+                    let potential=v9_patterns::bonus(hint,&request.next,n.hold,n.index);
+                    let progress=potential-parent_bonus;
+                    if progress>0.7 && potential>=2.0 { Some((progress,i)) } else { None }
+                }).collect();
+            guided.sort_by(|a,b|b.0.total_cmp(&a.0)
+                .then_with(||local[b.1].estimate.total_cmp(&local[a.1].estimate)));
+            for (_,i) in guided {
+                if picked.len()>=9 {break;}
+                let n=&local[i];
+                if !picked.iter().any(|p|p.board==n.board && p.hold==n.hold && p.index==n.index) {
+                    picked.push(n.clone());
+                }
+            }
+            for n in local.into_iter() {
+                if picked.len()>=9 {break;}
+                if !picked.iter().any(|p|p.board==n.board && p.hold==n.hold && p.index==n.index) {
+                    picked.push(n);
+                }
+            }
+            next.extend(picked);
         }
         if interrupted || next.is_empty() { break; }
         beam=prune(next,request.beam,request.beam.min(12));
@@ -430,7 +463,7 @@ fn handle_request(line: &str) -> String {
 }
 fn main() {
     if std::env::args().any(|arg| arg == "--version") {
-        println!("trassist-v7 0.1.0 (S1-inspired; SRS 90; no 180 kicks)");
+        println!("trassist-v9 0.2.0 (pattern-guided; S1-inspired; SRS 90; no 180 kicks)");
         return;
     }
     let stdin = io::stdin();

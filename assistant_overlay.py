@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from tetris_core import read_cells, occupied_without_active, shift_active
+from smooth_plan import PlanMemory, state_key as stable_state_key
 from solver_v6 import SearchSettingsV6, describe_action_v6, find_best_v6
 from solver_v7 import (SearchSettingsV7, describe_action_v7, find_best_v7,
                        native_path)
@@ -222,8 +223,8 @@ def main():
             allow_hold=bool(cfg.get("search_allow_hold", True)))
         solve_function = find_best_v7
         describe_function = describe_action_v7
-        overlay.subtitle = "Solver V7 native / reachable future search"
-        print(f"Native V7 engine enabled: {native_path()}")
+        overlay.subtitle = "Solver V9 native / pattern-guided reachable search"
+        print(f"Native V9 engine enabled: {native_path()}")
     else:
         search_settings = SearchSettingsV6(
             depth=int(cfg.get("search_depth", 5)),
@@ -233,12 +234,15 @@ def main():
         solve_function = find_best_v6
         describe_function = describe_action_v6
         overlay.subtitle = "Solver V6 fallback / build native_v7 for V7"
-        print(f"Native V7 engine not built; using V6 fallback. Expected: {native_path()}")
+        print(f"Native V9 engine not built; using V6 fallback. Expected: {native_path()}")
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
+    plan_memory = PlanMemory()
     solver_future = None
     pending_key = None
+    pending_pose = None
     result_key = None
+    result_pose = None
     result = None
     timer = QTimer()
     shutdown_timer = QTimer()
@@ -246,7 +250,8 @@ def main():
 
     def tick():
         nonlocal previous_active, previous_name, previous_queue
-        nonlocal solver_future, pending_key, result_key, result
+        nonlocal solver_future, pending_key, pending_pose
+        nonlocal result_key, result_pose, result
         try:
             screenshot = np.asarray(capture.grab(region))
             labels = read_cells(screenshot,
@@ -313,10 +318,9 @@ def main():
                         active = shift_active(active, -spawn_rows)
                         visible_labels = labels[spawn_rows:].copy()
                         stack = occupied_without_active(visible_labels, active)
-                        state_key = (stack.tobytes(), active.name,
-                                     active.rotation, active.x,
-                                     tuple(tracker.queue or ()), tracker.hold,
-                                     tracker.can_hold, search_settings)
+                        state_key = stable_state_key(
+                            stack, active.name, tracker.queue, tracker.hold,
+                            tracker.can_hold, search_settings)
                         if solver_future is not None and solver_future.done():
                             completed = solver_future
                             completed_key = pending_key
@@ -324,14 +328,30 @@ def main():
                             pending_key = None
                             result = completed.result()
                             result_key = completed_key
+                            result_pose = pending_pose
+                            pending_pose = None
+                        if result_key == state_key:
+                            # None is meaningful: it clears an older plan for
+                            # this exact state instead of reviving stale advice.
+                            plan_memory.store(state_key, stack, result)
+                        cached = plan_memory.show(state_key, stack)
                         if result_key != state_key and solver_future is None:
                             pending_key = state_key
+                            pending_pose = (active.x, active.y,
+                                            active.rotation)
                             solver_future = solver_pool.submit(
                                 solve_function, stack.copy(), active,
                                 tuple(tracker.queue or ()), tracker.hold,
                                 tracker.can_hold, search_settings)
-                        best = result if result_key == state_key else None
-                        if result_key != state_key:
+                        best = (result if result_key == state_key else
+                                cached.best if cached else None)
+                        preview_only = (result_key != state_key and
+                                        cached is not None and cached.predicted)
+                        instructions_stale = (
+                            result_key == state_key and result_pose is not None
+                            and result_pose != (active.x, active.y,
+                                                active.rotation))
+                        if result_key != state_key and best is None:
                             overlay.clear_targets()
                             overlay.text = f"CURRENT={current} | planning lookahead..."
                             overlay.subtitle = (f"NEXT: {queue_text} | "
@@ -366,7 +386,12 @@ def main():
                             else:
                                 overlay.third_target = None
                                 overlay.third_target_name = None
-                            overlay.text = describe_function(active, best)
+                            overlay.text = (
+                                f"Predicted {current}: follow landing guide; route pending"
+                                if preview_only else
+                                "Target retained; route directions are from the initial pose"
+                                if instructions_stale else
+                                describe_function(active, best))
                             cooldown = ("ready" if tracker.can_hold else
                                         "used" if tracker.can_hold is False else "?")
                             plan_names = [name for name in

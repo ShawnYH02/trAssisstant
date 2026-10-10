@@ -84,9 +84,18 @@ Its default target is depth 5 with a 250 ms budget; the HUD reports
 the depth actually completed and elapsed search time. Tune `search_depth`,
 `beam_width`, and `search_budget_ms` in `config.json` if needed.
 
-## Optional native V7 solver
+Accepted plans remain visible while the falling piece moves. The route text is
+marked stale when it was calculated from an earlier pose, but the landing guide
+is retained. After a planned lock or HOLD, the overlay validates the board,
+queue, and HOLD transition before promoting the next ghost immediately while a
+fresh background search replenishes the plan. Unexpected transitions discard
+the cached preview and trigger normal replanning.
 
-V7 uses a dependency-free Rust executable for reachable future-piece search.
+## Optional native V9 solver
+
+V9 uses a dependency-free Rust executable for reachable future-piece search
+with queue-aware structural pattern hints. These hints guide planning but do
+not assert that a named setup is executable.
 If Cargo is installed, build and verify it with:
 
 ```powershell
@@ -96,10 +105,10 @@ python smoke_v7.py
 ```
 
 On the next launch, the overlay detects
-`native_v7\target\release\trassist-v7.exe` and enables V7 automatically. If it
+`native_v7\target\release\trassist-v7.exe` and enables V9 automatically. If it
 is absent, the overlay prints a notice and safely continues with the tested V6
-solver. `benchmark_v7.py` compares V6/V7 on deterministic bags after the native
-binary is built.
+solver. The executable name remains V7-compatible. Use `benchmark_v9.py` for
+side-by-side latency/depth measurement against a saved native baseline.
 
 ## Troubleshooting recognition
 
@@ -129,9 +138,12 @@ python -m pytest -q
 - V6 preserves diverse first-move candidates, caps continuations per parent,
   rewards perfect clears, and evaluates nonlinear height danger, buried holes,
   transitions, roughness, and accessible wells.
-- Native V7 extends future-piece search to collision-checked BFS with 90°
+- Native V9 extends future-piece search to collision-checked BFS with 90°
   SRS-style kicks. Python still supplies the exact reachable CURRENT routes and
   HOLD roots, while Rust selects among them using deeper continuations.
+- V9's T-slot, Kaidan-like, STMB-like, and STSD-like scores are structural
+  search hints, not guarantees that a named setup or spin is executable. Actual
+  attack credit still requires the native movement search to produce a spin.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
@@ -147,14 +159,17 @@ python -m pytest -q
 - Suggested routes are collision-checked in a turn-based model, but gravity,
   frame timing, auto-shift charge, and lock delay are not simulated. A legal
   route may still require faster execution than the current game state allows.
+- Moving after a route is calculated keeps the landing guide stable but can make
+  the original finesse directions stale or the landing unreachable. The HUD
+  warns when directions came from an earlier pose.
 - Only CURRENT receives a collision-checked action path. Future placements are
   forecasting candidates, not guaranteed input routes, and the scoring is an
   approximation rather than an exact attack simulator.
 - Offline benchmark/self-play metrics are heuristic comparisons, not evidence
   of multiplayer strength or parity with mature Tetris engines.
-- V7 requires a locally built Rust executable and starts one native process per
+- V9 requires a locally built Rust executable and starts one native process per
   decision. It intentionally falls back to V6 in the overlay when unbuilt;
-  V7-specific benchmarks fail instead of silently substituting another engine.
+  native-specific benchmarks fail instead of silently substituting another engine.
 - Fits the queue-identified active shape against the board and can tolerate one
   missing or misclassified cell when recent pose evidence resolves ambiguity.
   It suspends suggestions when position or rotation is not sufficiently clear.
