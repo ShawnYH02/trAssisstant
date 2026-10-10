@@ -16,9 +16,6 @@ captures/
 config.json.*.bak
 assistant_overlay.py.*.bak
 
-# Native build output
-native_v7/target/
-
 # Third-party optional engine checkout and build output
 cold_clear_2/
 
@@ -30,6 +27,8 @@ cc2_latency.jsonl
 cc2_latency_*.jsonl
 cc2_transitions.jsonl
 cc2_transitions_*.jsonl
+cc2_recovery.jsonl
+cc2_recovery_*.jsonl
 
 # Editor and operating-system metadata
 .vscode/

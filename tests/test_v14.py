@@ -146,11 +146,11 @@ def test_routes_prefetched_only_for_matching_spawn(tmp_path, monkeypatch):
 
 def test_early_prefetch_works_in_integrated_bridge(tmp_path, monkeypatch):
     import solver_cc2_fast as fast
-    import solver_cc2_first as first
+    import solver_cc2_reliable as reliable
     import solver_cc2_prefetch as prefetch
     import solver_v5 as v5
     client,log=make_client(tmp_path)
-    monkeypatch.setattr(first,'get_first_client',lambda exe:client)
+    monkeypatch.setattr(reliable,'get_reliable_client',lambda exe:client)
     monkeypatch.setenv('TRASSIST_CC2_METRICS','off')
     try:
         result=fast.find_best_cc2_fast(np.zeros((20,10),bool),

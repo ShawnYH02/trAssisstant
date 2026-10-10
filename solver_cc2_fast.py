@@ -221,8 +221,8 @@ atexit.register(lambda: _engine_pool.shutdown(wait=False, cancel_futures=True))
 def warm_up_cc2(executable: Path):
     """Optional eager handshake, should be invoked from a background thread."""
     try:
-        from solver_cc2_first import get_first_client
-        get_first_client(executable).open()
+        from solver_cc2_reliable import get_reliable_client
+        get_reliable_client(executable).open()
     except (OSError, RuntimeError, TimeoutError) as exc:
         print('Cold Clear warmup warning:', exc)
 
@@ -247,8 +247,8 @@ def find_best_cc2_fast(board: np.ndarray, active, next_queue=(), hold=None,
         return None
     started = time.perf_counter()
     queue_pieces = tuple(p for p in (next_queue or ()) if p in base.PIECES)
-    from solver_cc2_first import get_first_client
-    client = get_first_client(base.cc2_path(settings))
+    from solver_cc2_reliable import get_reliable_client, report_unmatched
+    client = get_reliable_client(base.cc2_path(settings))
     client.set_route_limit(settings.max_current_states)
     # Engine search runs independently of Python's collision-path enumeration.
     # On Windows this overlaps native CC2 computation with Python geometry work.
@@ -292,7 +292,29 @@ def find_best_cc2_fast(board: np.ndarray, active, next_queue=(), hold=None,
             selected = (choice, match)
             break
     # The search tree is reused only if a root was physically validated.
+    if selected is None and paired:
+        # The earliest nonempty reply can be unreachable from the observed
+        # pose. Let CC2 improve it briefly without weakening route/spin checks.
+        def is_legal(candidate):
+            return base.legal_root_for_suggestion(
+                candidate, paired, active.name, hold, queue_pieces,
+                can_hold is True and settings.allow_hold,
+                settings.strict_spin) is not None
+
+        retry = client.retry_for_valid(is_legal, budget_ms=250)
+        if retry is not None:
+            msg = retry
+            for choice in msg.get('moves', []):
+                match = base.legal_root_for_suggestion(
+                    choice, paired, active.name, hold, queue_pieces,
+                    can_hold is True and settings.allow_hold,
+                    settings.strict_spin)
+                if match is not None:
+                    selected = (choice, match)
+                    break
     if selected is None:
+        report_unmatched(active.name, msg, states=states,
+                         strict_spin=settings.strict_spin)
         client.forget()
         return None
     raw, (move, hold_used) = selected

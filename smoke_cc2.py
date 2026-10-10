@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from solver_cc2 import SearchSettingsCC2, cc2_path
 from solver_cc2_fast import applied_lock, find_best_cc2_fast
-from solver_cc2_first import close_first_clients, get_first_client
+from solver_cc2_reliable import close_reliable_clients, get_reliable_client
 from solver_v5 import _make_spawn
 
 
@@ -37,7 +37,7 @@ def main():
             current, next_queue, hold = 'I', ('O', 'L', 'S', 'J', 'Z'), None
         second = find_best_cc2_fast(
             next_board, _make_spawn(current), next_queue, hold, True, settings)
-        client = get_first_client(binary)
+        client = get_reliable_client(binary)
         if second is None or client.mode != 'prefetch_hit':
             raise SystemExit(
                 f'CC2 tree-advance verification failed: '
@@ -45,7 +45,7 @@ def main():
         print('Tree reuse mode:', client.mode)
         print('Second verified recommendation:', second)
     finally:
-        close_first_clients()
+        close_reliable_clients()
 
 
 if __name__ == '__main__':

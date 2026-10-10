@@ -16,11 +16,10 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
+from capture_frame import CoherentFrame
+from pose_guard import PoseGapGuard
 from tetris_core import read_cells, occupied_without_active, shift_active
 from smooth_plan import PlanMemory, state_key as stable_state_key
-from solver_v6 import SearchSettingsV6, describe_action_v6, find_best_v6
-from solver_v7 import (SearchSettingsV7, describe_action_v7, find_best_v7,
-                       native_path)
 from solver_cc2 import (CC2Recommendation, SearchSettingsCC2, cc2_path,
                         close_engines, describe_action_cc2)
 from solver_cc2_fast import (close_fast_engines, find_best_cc2_fast,
@@ -28,6 +27,7 @@ from solver_cc2_fast import (close_fast_engines, find_best_cc2_fast,
 from perf_metrics import UILatencyTracker
 from solver_cc2_first import (TransitionPending, close_first_clients)
 from solver_cc2_prefetch import close_prefetch_clients
+from solver_cc2_reliable import close_reliable_clients
 from solver_cc2_resync import close_resync_clients
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
@@ -222,90 +222,44 @@ def main():
                    "height": int(max(bottoms) - min(tops))}
     else:
         hud_box = None
-    native_enabled = native_path().is_file()
-    if native_enabled:
-        legacy_settings = SearchSettingsV7(
-            depth=int(cfg.get("search_depth", 5)),
-            beam_width=int(cfg.get("beam_width", 36)),
-            time_budget_ms=float(cfg.get("search_budget_ms", 250)),
-            allow_hold=bool(cfg.get("search_allow_hold", True)))
-        legacy_solve = find_best_v7
-        legacy_describe = describe_action_v7
-        legacy_name = "V11"
-    else:
-        legacy_settings = SearchSettingsV6(
-            depth=int(cfg.get("search_depth", 5)),
-            beam_width=int(cfg.get("beam_width", 24)),
-            time_budget_ms=float(cfg.get("search_budget_ms", 250)),
-            allow_hold=bool(cfg.get("search_allow_hold", True)))
-        legacy_solve = find_best_v6
-        legacy_describe = describe_action_v6
-        legacy_name = "V6"
-
     engine_choice = str(cfg.get("solver_engine", "legacy")).lower()
     cc2_binary = cc2_path(SearchSettingsCC2(
         executable=cfg.get("coldclear2_exe")))
-    if engine_choice == "coldclear2" and cc2_binary.is_file():
-        search_settings = SearchSettingsCC2(
-            executable=str(cc2_binary),
-            time_budget_ms=float(cfg.get("cc2_budget_ms", 350)),
-            max_current_states=int(cfg.get("cc2_current_states", 5000)),
-            allow_hold=bool(cfg.get("search_allow_hold", True)),
-            strict_spin=bool(cfg.get("cc2_strict_spin", True)))
-        reported_cc2_errors = set()
+    if engine_choice != "coldclear2":
+        raise SystemExit(
+            "CC2-only coaching mode: set solver_engine to coldclear2; "
+            "legacy fallback is disabled")
+    if not cc2_binary.is_file():
+        raise SystemExit(f"Cold Clear 2 executable not found: {cc2_binary}")
+    search_settings = SearchSettingsCC2(
+        executable=str(cc2_binary),
+        time_budget_ms=float(cfg.get("cc2_budget_ms", 350)),
+        max_current_states=int(cfg.get("cc2_current_states", 5000)),
+        allow_hold=bool(cfg.get("search_allow_hold", True)),
+        strict_spin=bool(cfg.get("cc2_strict_spin", True)))
 
-        def solve_function(board, active, queue, hold, can_hold, settings):
-            try:
-                answer = find_best_cc2_fast(board, active, queue, hold,
-                                            can_hold, settings)
-                if answer is not None:
-                    return answer
-                problem = "no CC2 suggestion matched a reachable current route"
-            except TransitionPending:
-                # A lock/line-clear frame is still settling. Suppress advice
-                # briefly instead of rendering a fallback for mixed states.
-                return None
-            except (FileNotFoundError, OSError, RuntimeError,
-                    TimeoutError) as exc:
-                problem = f"{type(exc).__name__}: {exc}"
-            if problem not in reported_cc2_errors:
-                reported_cc2_errors.add(problem)
-                print(f"Cold Clear 2 fallback to {legacy_name}: {problem}")
-            return legacy_solve(board, active, queue, hold, can_hold,
-                                legacy_settings)
+    def solve_function(board, active, queue, hold, can_hold, settings):
+        return find_best_cc2_fast(board, active, queue, hold, can_hold,
+                                  settings)
 
-        def describe_function(active, best):
-            if isinstance(best, CC2Recommendation):
-                return describe_action_cc2(active, best)
-            return f"{legacy_name} fallback: " + legacy_describe(active, best)
-
-        overlay.subtitle = "Cold Clear 2 / speculative verified prefetch"
-        print(f"Cold Clear 2 engine enabled: {cc2_binary}")
-        print(f"Safe fallback engine: {legacy_name}")
-        threading.Thread(target=warm_up_cc2, args=(cc2_binary,),
-                         daemon=True, name="cc2-warmup").start()
-    else:
-        search_settings = legacy_settings
-        solve_function = legacy_solve
-        describe_function = legacy_describe
-        if engine_choice == "coldclear2":
-            print(f"Cold Clear 2 not found at {cc2_binary}; using {legacy_name}")
-        if native_enabled:
-            overlay.subtitle = "Solver V11 native / confirmed tactical TSD search"
-            print(f"Native V11 engine enabled: {native_path()}")
-        else:
-            overlay.subtitle = "Solver V6 fallback / build native V11"
-            print(f"Native V11 engine not built; using V6. Expected: {native_path()}")
+    describe_function = describe_action_cc2
+    overlay.subtitle = "Cold Clear 2 / coherent capture / verified routes"
+    print(f"Cold Clear 2 engine enabled: {cc2_binary}")
+    print("CC2-only coaching mode: legacy fallback disabled")
+    threading.Thread(target=warm_up_cc2, args=(cc2_binary,),
+                     daemon=True, name="cc2-warmup").start()
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
     plan_memory = PlanMemory()
     ui_latency = UILatencyTracker()
+    pose_guard = PoseGapGuard(grace_ms=int(cfg.get("pose_grace_ms", 90)))
     solver_future = None
     pending_key = None
     pending_pose = None
     result_key = None
     result_pose = None
     result = None
+    solver_error = None
     timer = QTimer()
     shutdown_timer = QTimer()
     stop_requested = threading.Event()
@@ -313,9 +267,11 @@ def main():
     def tick():
         nonlocal previous_active, previous_name, previous_queue
         nonlocal solver_future, pending_key, pending_pose
-        nonlocal result_key, result_pose, result
+        nonlocal result_key, result_pose, result, solver_error
         try:
-            screenshot = np.asarray(capture.grab(region))
+            frame = CoherentFrame(
+                capture, (region, next_region, hud_box, queue_roi, hold_roi))
+            screenshot = frame.crop(region)
             labels = read_cells(screenshot,
                                 saturation_min=cfg.get("saturation_min", 72),
                                 value_min=cfg.get("value_min", 70),
@@ -328,23 +284,23 @@ def main():
             else:
                 if next_region is not None:
                     upcoming = read_queue_region(
-                        np.asarray(capture.grab(next_region)),
+                        frame.crop(next_region),
                         saturation_min=cfg.get("queue_saturation_min", 65),
                         value_min=cfg.get("queue_value_min", 55))
                 elif next_rois:
                     upcoming = read_queue_rois(
-                        np.asarray(capture.grab(hud_box)), next_rois,
+                        frame.crop(hud_box), next_rois,
                         (hud_box["left"], hud_box["top"]),
                         saturation_min=cfg.get("queue_saturation_min", 70),
                         value_min=cfg.get("queue_value_min", 60))
                 else:
                     upcoming = read_next_queue(
-                        np.asarray(capture.grab(queue_roi)), slots=queue_slots,
+                        frame.crop(queue_roi), slots=queue_slots,
                         saturation_min=cfg.get("queue_saturation_min", 95),
                         value_min=cfg.get("queue_value_min", 90),
                         min_pixels=cfg.get("queue_min_pixels", 12))
                 hold_view = (read_hold_view(
-                    np.asarray(capture.grab(hold_roi)),
+                    frame.crop(hold_roi),
                     previous=tracker.hold, proposed_current=tracker.current,
                     saturation_min=cfg.get("queue_saturation_min", 85),
                     value_min=cfg.get("queue_value_min", 75))
@@ -352,12 +308,14 @@ def main():
                 current = tracker.observe(upcoming, hold_view)
                 queue_text = " ".join(tracker.queue or ()) or "unreadable"
                 if upcoming is None:
+                    pose_guard.invalidate()
                     overlay.clear_targets()
                     overlay.text = "NEXT preview unreadable; advice paused"
                     overlay.subtitle = f"Last stable NEXT: {queue_text}"
                     previous_active = None
                     previous_name = None
                 elif current is None:
+                    pose_guard.invalidate()
                     overlay.clear_targets()
                     overlay.text = tracker.status
                     overlay.subtitle = (f"NEXT: {queue_text} | "
@@ -371,10 +329,20 @@ def main():
                     previous_queue = tracker.queue
                     previous_name = current
                     if active is None:
-                        overlay.clear_targets()
-                        overlay.text = f"CURRENT={current} | pose not confidently visible"
-                        overlay.subtitle = "Tolerant 3-of-4 detection; check board crop/theme"
-                        previous_active = None
+                        if pose_guard.keep(labels, current, tracker.queue,
+                                           tracker.hold):
+                            overlay.text = (
+                                f"CURRENT={current} | pose temporarily uncertain")
+                            overlay.subtitle = (
+                                "Last VERIFIED ghost retained briefly; "
+                                "directions paused")
+                        else:
+                            overlay.clear_targets()
+                            overlay.text = (
+                                f"CURRENT={current} | pose not confidently visible")
+                            overlay.subtitle = (
+                                "No verified placement; waiting for visual tracking")
+                            previous_active = None
                     else:
                         previous_active = active
                         active = shift_active(active, -spawn_rows)
@@ -389,9 +357,27 @@ def main():
                             completed_key = pending_key
                             solver_future = None
                             pending_key = None
-                            result = completed.result()
-                            result_key = completed_key
-                            result_pose = pending_pose
+                            try:
+                                result = completed.result()
+                                solver_error = None
+                            except TransitionPending:
+                                # Retry this same observation on the next tick;
+                                # the bounded coherence window may then release
+                                # it or a complete frame may arrive first.
+                                result = None
+                                result_key = None
+                                result_pose = None
+                                solver_error = None
+                            except Exception as exc:
+                                result = None
+                                result_key = completed_key
+                                result_pose = pending_pose
+                                solver_error = (completed_key, exc)
+                                print("CC2 request failed (no legacy fallback):",
+                                      repr(exc))
+                            else:
+                                result_key = completed_key
+                                result_pose = pending_pose
                             pending_pose = None
                         if result_key == state_key:
                             # None is meaningful: it clears an older plan for
@@ -414,7 +400,12 @@ def main():
                             result_key == state_key and result_pose is not None
                             and result_pose != (active.x, active.y,
                                                 active.rotation))
-                        if result_key != state_key and best is None:
+                        if (solver_error is not None and
+                                solver_error[0] == state_key):
+                            overlay.clear_targets()
+                            overlay.text = "COLD CLEAR UNAVAILABLE — no fallback"
+                            overlay.subtitle = str(solver_error[1])[:150]
+                        elif result_key != state_key and best is None:
                             overlay.clear_targets()
                             overlay.text = f"CURRENT={current} | planning lookahead..."
                             overlay.subtitle = (f"NEXT: {queue_text} | "
@@ -431,6 +422,10 @@ def main():
                         else:
                             overlay.target = best.cells
                             overlay.target_name = best.name
+                            pose_guard.observe(
+                                labels, current, tracker.queue, tracker.hold,
+                                ghost_verified=isinstance(best,
+                                                          CC2Recommendation))
                             ui_latency.visible(state_key,
                                                predicted=preview_only)
                             next_cells = best.next_cells
@@ -527,6 +522,7 @@ def main():
         overlay.close()
         capture.close()
         solver_pool.shutdown(wait=True, cancel_futures=True)
+        close_reliable_clients()
         close_first_clients()
         close_resync_clients()
         close_prefetch_clients()

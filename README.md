@@ -80,9 +80,9 @@ confirmed queue shift before it can identify CURRENT. If the queue changes too
 quickly or unexpectedly, advice is suspended until tracking resynchronizes.
 
 The solver runs on a background worker so capture and Ctrl+C remain responsive.
-Its default target is depth 5 with a 250 ms budget; the HUD reports
-the depth actually completed and elapsed search time. Tune `search_depth`,
-`beam_width`, and `search_budget_ms` in `config.json` if needed.
+CC2 returns the first nonempty suggestion within the recovery ceiling, while
+Python independently verifies that the current piece can reach it. The HUD
+reports total decision time.
 
 Accepted plans remain visible while the falling piece moves. The route text is
 marked stale when it was calculated from an earlier pose, but the landing guide
@@ -91,14 +91,14 @@ queue, and HOLD transition before promoting the next ghost immediately while a
 fresh background search replenishes the plan. Unexpected transitions discard
 the cached preview and trigger normal replanning.
 
-## Optional Cold Clear 2 backend (speculative prefetch)
+## Cold Clear 2 backend (required)
 
 The adapter uses a persistent Cold Clear 2 process for move selection
 while retaining this project's vision, HOLD/queue tracking, click-through
 overlay, and collision-checked current-piece routes. CC2 suggestions are shown
-only when they match a locally reachable placement. If CC2 times out or returns
-only an unavailable HOLD/unverified route, the overlay safely falls back to the
-native V11 solver (or V6 when V11 is not built).
+only when they match a locally reachable placement. This build fails closed:
+if CC2 is missing, times out, or raises an error, it clears the ghost and shows
+`COLD CLEAR UNAVAILABLE` instead of silently changing evaluators.
 
 After a suggestion matches a legal current-piece route, CC2 speculatively
 advances that move and searches the likely next position while the player is
@@ -125,15 +125,14 @@ Enable it in the machine-local `config.json`:
   "cc2_budget_ms": 350,
   "cc2_current_states": 5000,
   "cc2_strict_spin": true,
-  "capture_interval_ms": 50
+  "capture_interval_ms": 50,
+  "pose_grace_ms": 90
 }
 ```
 
-Use `"solver_engine": "legacy"` to select V11/V6 directly. An absolute
-`coldclear2_exe` path can be supplied when the executable is elsewhere. CC2's
-TBP response contains alternative immediate moves, not a sequential plan, so
-the CC2 path intentionally shows one ghost; the three-ghost display remains
-available whenever the V11 fallback supplies the recommendation.
+An absolute `coldclear2_exe` path can be supplied when the executable is
+elsewhere. CC2's TBP response contains alternative immediate moves, not a
+sequential plan, so the overlay intentionally shows one verified ghost.
 
 The adapter records local timing samples in `cc2_latency.jsonl`. After playing
 a few pieces, run `python perf_report.py` to see p50/p95 latency, prefetch hit
@@ -175,31 +174,37 @@ Measure CC2 readiness independently from capture and route enumeration with:
 python benchmark_cc2.py --trials 8 --budget-ms 800
 ```
 
-Optional polling controls are `TRASSIST_CC2_FIRST_POLL_MS` (default `8`) and
-`TRASSIST_CC2_FIRST_INTERVAL_MS` (default `5`). The transition window is
-controlled by `TRASSIST_CC2_SETTLE_MS` (default `130`).
+The standalone first-readiness benchmark accepts the experimental
+`TRASSIST_CC2_FIRST_POLL_MS` (default `8`) and
+`TRASSIST_CC2_FIRST_INTERVAL_MS` (default `5`) controls. The live recovery
+client deliberately uses the conservative cadence described below. The
+transition window is controlled by `TRASSIST_CC2_SETTLE_MS` (default `130`).
 
-## Optional native V11 solver
+### No-placement recovery
 
-V11 uses a dependency-free Rust executable for reachable future-piece search.
-It retains queue-aware structural hints and adds bounded tactical proof for
-reachable full T-spin Doubles when T is immediate, held, or one known piece
-away. Only movement-verified proofs receive the tactical priority bonus.
-If Cargo is installed, build and verify it with:
+The runtime uses a conservative 25 ms request cadence and permits up to 700 ms
+for a late initial CC2 answer, while still returning immediately when a result
+is available. If the earliest result cannot be matched to a reachable local
+route, CC2 receives another 250 ms to improve its candidates. No unvalidated
+placement is ever displayed; failure clears the ghost and remains fail-closed.
+
+Recovery events are written locally to `cc2_recovery.jsonl`. To distinguish an
+engine timeout from rejected candidate geometry, run:
 
 ```powershell
-cargo build --release --manifest-path native_v7\Cargo.toml
-cargo test --manifest-path native_v7\Cargo.toml
-python smoke_v7.py
+python recovery_report.py
 ```
 
-On the next launch, the overlay detects
-`native_v7\target\release\trassist-v7.exe` and enables V11 automatically. If it
-is absent, the overlay prints a notice and safely continues with the tested V6
-solver. The executable name remains V7-compatible. Use `benchmark_native.py` for
-side-by-side latency/depth measurement against a saved native baseline.
+`TRASSIST_CC2_RECOVERY_BUDGET_MS` controls the initial availability ceiling
+(default `700`). Set `TRASSIST_CC2_RECOVERY_LOG=off` to disable this diagnostic
+log. Reduce the ceiling only after the report shows that valid replies reliably
+arrive sooner.
 
 ## Troubleshooting recognition
+
+Run `python diagnose_runtime.py` first to verify that the active configuration
+uses Cold Clear 2, coherent frame capture, the pose guard, and fail-closed
+solver behavior. This check does not start the overlay or modify your files.
 
 Run `python inspect_capture.py` to save `debug_board.png` and print the detected
 10-column grid, including the four capture rows above the board. If the cells do
@@ -221,34 +226,20 @@ python -m pytest -q
 - Searches from the currently detected position and rotation. Taps,
   hold-to-obstacle moves, soft drops, 90° rotations, and hard drops are checked
   for collisions before a route is suggested.
-- Plans up to five pieces using the recognized NEXT queue, beam pruning, and an
-  S1-inspired heuristic for Quads, T-spins, B2B chains, and combos. HOLD is
-  considered only when the tracker reports it available.
-- V6 preserves diverse first-move candidates, caps continuations per parent,
-  rewards perfect clears, and evaluates nonlinear height danger, buried holes,
-  transitions, roughness, and accessible wells.
-- Native V11 extends future-piece search to collision-checked BFS with 90°
-  SRS-style kicks. Python still supplies the exact reachable CURRENT routes and
-  HOLD roots, while Rust selects among them using deeper continuations.
-- Its T-slot, Kaidan-like, STMB-like, and STSD-like scores are structural
-  search hints, not guarantees that a named setup or spin is executable. Actual
-  attack credit still requires the native movement search to produce a spin.
-- V11 temporarily prioritizes branches only after its bounded native movement
-  search proves a reachable full T-spin Double. Negative probes can still miss
-  180-kick, gravity-timed, or deeper tactical continuations.
-- The optional CC2 backend assumes guideline TBP semantics and cannot express
+- The CC2 backend assumes guideline TBP semantics and cannot express
   the live HOLD cooldown directly. Every displayed CC2 placement is therefore
   filtered against the observed cooldown and the local reachable-route search.
-- CC2 uses the full configured budget after a fresh/reset state. It starts
-  searching the validated suggested move early, but uses that prefetched tree
-  only when the observed lock, queue shift, HOLD state, and cooldown prove the
+- CC2 returns the first available candidate within the recovery ceiling. It
+  searches a validated suggested move early, but uses that prefetched tree only
+  when the observed lock, queue shift, HOLD state, and cooldown prove the
   displayed suggestion was followed; otherwise it resets.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
-- Ranks placements using line clears, height, holes, covered holes, surface
-  bumpiness, wells, and row transitions. It is not provably optimal.
 - Reads the 10×20 playfield plus four capture rows above it so a complete
   tetromino can be recognized before it enters the visible board.
+- Board, NEXT, and HOLD are normally cropped from one coherent MSS frame. If
+  their union exceeds three million pixels, capture safely falls back to the
+  individual rectangles.
 - Reads each colored NEXT preview from its own rectangle. HOLD identity persists
   when its icon dims, while hold availability is tracked separately. Queue
   tracking intentionally waits for a confirmed shift instead of guessing the
@@ -261,14 +252,11 @@ python -m pytest -q
 - Moving after a route is calculated keeps the landing guide stable but can make
   the original finesse directions stale or the landing unreachable. The HUD
   warns when directions came from an earlier pose.
-- Only CURRENT receives a collision-checked action path. Future placements are
-  forecasting candidates, not guaranteed input routes, and the scoring is an
-  approximation rather than an exact attack simulator.
+- A verified ghost can remain for at most `pose_grace_ms` during a small pose
+  dropout when CURRENT, NEXT, HOLD, and nearly all cells remain unchanged.
+  Directions are paused; larger changes immediately clear it.
 - Offline benchmark/self-play metrics are heuristic comparisons, not evidence
   of multiplayer strength or parity with mature Tetris engines.
-- V11 requires a locally built Rust executable and starts one native process per
-  decision. It intentionally falls back to V6 in the overlay when unbuilt;
-  native-specific benchmarks fail instead of silently substituting another engine.
 - Fits the queue-identified active shape against the board and can tolerate one
   missing or misclassified cell when recent pose evidence resolves ambiguity.
   It suspends suggestions when position or rotation is not sufficiently clear.

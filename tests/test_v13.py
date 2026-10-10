@@ -96,14 +96,14 @@ def test_protocol_tree_reuse_and_reset(tmp_path):
 
 def test_real_v12_solver_bridge_with_fake(monkeypatch,tmp_path):
     import solver_cc2_fast as fast
-    import solver_cc2_first as first
+    import solver_cc2_reliable as reliable
     import solver_cc2_prefetch as prefetch
     import solver_v5 as v5
     log=tmp_path/'audit.jsonl'
     client=prefetch.PrefetchTBPProcess(
         Path(sys.executable),
         command=[sys.executable, str(ROOT/'tests'/'fake_cc2_fast.py'), str(log)])
-    monkeypatch.setattr(first,'get_first_client',lambda _:client)
+    monkeypatch.setattr(reliable,'get_reliable_client',lambda _:client)
     monkeypatch.setenv('TRASSIST_CC2_METRICS','off')
     try:
         board=np.zeros((20,10),bool)
@@ -139,7 +139,7 @@ def test_hold_cooldown_change_does_not_reuse_stale_tree(tmp_path):
 
 def test_root_and_engine_search_overlap(monkeypatch):
     import solver_cc2_fast as fast
-    import solver_cc2_first as first
+    import solver_cc2_reliable as reliable
     import solver_cc2_prefetch as prefetch
     import solver_v5 as v5
     import time
@@ -158,7 +158,7 @@ def test_root_and_engine_search_overlap(monkeypatch):
         def remember(self,*args):pass
         def forget(self):pass
     fake=Client()
-    monkeypatch.setattr(first,'get_first_client',lambda path:fake)
+    monkeypatch.setattr(reliable,'get_reliable_client',lambda path:fake)
     original=v5._current_locks
     def delayed(board,active,max_states):
         time.sleep(.075)
