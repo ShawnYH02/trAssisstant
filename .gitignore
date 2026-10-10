@@ -19,10 +19,17 @@ assistant_overlay.py.*.bak
 # Native build output
 native_v7/target/
 
+# Third-party optional engine checkout and build output
+cold_clear_2/
+
 # Local secrets and logs
 .env
 .env.*
 *.log
+cc2_latency.jsonl
+cc2_latency_*.jsonl
+cc2_transitions.jsonl
+cc2_transitions_*.jsonl
 
 # Editor and operating-system metadata
 .vscode/

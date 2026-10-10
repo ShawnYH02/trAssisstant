@@ -21,6 +21,14 @@ from smooth_plan import PlanMemory, state_key as stable_state_key
 from solver_v6 import SearchSettingsV6, describe_action_v6, find_best_v6
 from solver_v7 import (SearchSettingsV7, describe_action_v7, find_best_v7,
                        native_path)
+from solver_cc2 import (CC2Recommendation, SearchSettingsCC2, cc2_path,
+                        close_engines, describe_action_cc2)
+from solver_cc2_fast import (close_fast_engines, find_best_cc2_fast,
+                             warm_up_cc2)
+from perf_metrics import UILatencyTracker
+from solver_cc2_first import (TransitionPending, close_first_clients)
+from solver_cc2_prefetch import close_prefetch_clients
+from solver_cc2_resync import close_resync_clients
 from queue_first import read_next_queue
 from vision_v4 import (PieceTrackerV4, locate_expected_piece, read_hold_view,
                        read_queue_region, read_queue_rois)
@@ -216,28 +224,82 @@ def main():
         hud_box = None
     native_enabled = native_path().is_file()
     if native_enabled:
-        search_settings = SearchSettingsV7(
+        legacy_settings = SearchSettingsV7(
             depth=int(cfg.get("search_depth", 5)),
             beam_width=int(cfg.get("beam_width", 36)),
             time_budget_ms=float(cfg.get("search_budget_ms", 250)),
             allow_hold=bool(cfg.get("search_allow_hold", True)))
-        solve_function = find_best_v7
-        describe_function = describe_action_v7
-        overlay.subtitle = "Solver V11 native / confirmed tactical TSD search"
-        print(f"Native V11 engine enabled: {native_path()}")
+        legacy_solve = find_best_v7
+        legacy_describe = describe_action_v7
+        legacy_name = "V11"
     else:
-        search_settings = SearchSettingsV6(
+        legacy_settings = SearchSettingsV6(
             depth=int(cfg.get("search_depth", 5)),
             beam_width=int(cfg.get("beam_width", 24)),
             time_budget_ms=float(cfg.get("search_budget_ms", 250)),
             allow_hold=bool(cfg.get("search_allow_hold", True)))
-        solve_function = find_best_v6
-        describe_function = describe_action_v6
-        overlay.subtitle = "Solver V6 fallback / build native_v7 for V7"
-        print(f"Native V11 engine not built; using V6 fallback. Expected: {native_path()}")
+        legacy_solve = find_best_v6
+        legacy_describe = describe_action_v6
+        legacy_name = "V6"
+
+    engine_choice = str(cfg.get("solver_engine", "legacy")).lower()
+    cc2_binary = cc2_path(SearchSettingsCC2(
+        executable=cfg.get("coldclear2_exe")))
+    if engine_choice == "coldclear2" and cc2_binary.is_file():
+        search_settings = SearchSettingsCC2(
+            executable=str(cc2_binary),
+            time_budget_ms=float(cfg.get("cc2_budget_ms", 350)),
+            max_current_states=int(cfg.get("cc2_current_states", 5000)),
+            allow_hold=bool(cfg.get("search_allow_hold", True)),
+            strict_spin=bool(cfg.get("cc2_strict_spin", True)))
+        reported_cc2_errors = set()
+
+        def solve_function(board, active, queue, hold, can_hold, settings):
+            try:
+                answer = find_best_cc2_fast(board, active, queue, hold,
+                                            can_hold, settings)
+                if answer is not None:
+                    return answer
+                problem = "no CC2 suggestion matched a reachable current route"
+            except TransitionPending:
+                # A lock/line-clear frame is still settling. Suppress advice
+                # briefly instead of rendering a fallback for mixed states.
+                return None
+            except (FileNotFoundError, OSError, RuntimeError,
+                    TimeoutError) as exc:
+                problem = f"{type(exc).__name__}: {exc}"
+            if problem not in reported_cc2_errors:
+                reported_cc2_errors.add(problem)
+                print(f"Cold Clear 2 fallback to {legacy_name}: {problem}")
+            return legacy_solve(board, active, queue, hold, can_hold,
+                                legacy_settings)
+
+        def describe_function(active, best):
+            if isinstance(best, CC2Recommendation):
+                return describe_action_cc2(active, best)
+            return f"{legacy_name} fallback: " + legacy_describe(active, best)
+
+        overlay.subtitle = "Cold Clear 2 / speculative verified prefetch"
+        print(f"Cold Clear 2 engine enabled: {cc2_binary}")
+        print(f"Safe fallback engine: {legacy_name}")
+        threading.Thread(target=warm_up_cc2, args=(cc2_binary,),
+                         daemon=True, name="cc2-warmup").start()
+    else:
+        search_settings = legacy_settings
+        solve_function = legacy_solve
+        describe_function = legacy_describe
+        if engine_choice == "coldclear2":
+            print(f"Cold Clear 2 not found at {cc2_binary}; using {legacy_name}")
+        if native_enabled:
+            overlay.subtitle = "Solver V11 native / confirmed tactical TSD search"
+            print(f"Native V11 engine enabled: {native_path()}")
+        else:
+            overlay.subtitle = "Solver V6 fallback / build native V11"
+            print(f"Native V11 engine not built; using V6. Expected: {native_path()}")
     solver_pool = ThreadPoolExecutor(max_workers=1,
                                      thread_name_prefix="tetris-solver")
     plan_memory = PlanMemory()
+    ui_latency = UILatencyTracker()
     solver_future = None
     pending_key = None
     pending_pose = None
@@ -321,6 +383,7 @@ def main():
                         state_key = stable_state_key(
                             stack, active.name, tracker.queue, tracker.hold,
                             tracker.can_hold, search_settings)
+                        ui_latency.observe(state_key)
                         if solver_future is not None and solver_future.done():
                             completed = solver_future
                             completed_key = pending_key
@@ -368,6 +431,8 @@ def main():
                         else:
                             overlay.target = best.cells
                             overlay.target_name = best.name
+                            ui_latency.visible(state_key,
+                                               predicted=preview_only)
                             next_cells = best.next_cells
                             if (next_cells is not None and
                                     all(0 <= x < 10 and 0 <= y < 20
@@ -413,7 +478,9 @@ def main():
             overlay.update()
 
     timer.timeout.connect(tick)
-    timer.start(80)  # ~12.5 Hz; lower than 60 FPS to keep CPU and UI responsive
+    capture_interval_ms = max(
+        25, min(160, int(cfg.get("capture_interval_ms", 50))))
+    timer.start(capture_interval_ms)
 
     def request_stop(*_args):
         stop_requested.set()
@@ -459,7 +526,12 @@ def main():
         shutdown_timer.stop()
         overlay.close()
         capture.close()
-        solver_pool.shutdown(wait=False, cancel_futures=True)
+        solver_pool.shutdown(wait=True, cancel_futures=True)
+        close_first_clients()
+        close_resync_clients()
+        close_prefetch_clients()
+        close_fast_engines()
+        close_engines()
         if console_handler is not None:
             try:
                 ctypes.windll.kernel32.SetConsoleCtrlHandler(console_handler, False)

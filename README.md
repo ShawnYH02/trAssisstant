@@ -91,6 +91,94 @@ queue, and HOLD transition before promoting the next ghost immediately while a
 fresh background search replenishes the plan. Unexpected transitions discard
 the cached preview and trigger normal replanning.
 
+## Optional Cold Clear 2 backend (speculative prefetch)
+
+The adapter uses a persistent Cold Clear 2 process for move selection
+while retaining this project's vision, HOLD/queue tracking, click-through
+overlay, and collision-checked current-piece routes. CC2 suggestions are shown
+only when they match a locally reachable placement. If CC2 times out or returns
+only an unavailable HOLD/unverified route, the overlay safely falls back to the
+native V11 solver (or V6 when V11 is not built).
+
+After a suggestion matches a legal current-piece route, CC2 speculatively
+advances that move and searches the likely next position while the player is
+still moving. When the lock occurs, the observed board, NEXT queue, HOLD
+contents, and cooldown must all match the prediction before that prefetched
+tree is used. Any mismatch safely restarts from the observed state. Optional
+Python legal-path precomputation for the predicted next piece is available,
+but disabled by default because local measurements showed no route-cache hits.
+
+Cold Clear 2 is third-party MIT/Apache-2.0 software and is intentionally not
+vendored into this repository. Build it beside `assistant_overlay.py`:
+
+```powershell
+git clone https://github.com/MinusKelvin/cold-clear-2.git cold_clear_2
+cargo build --release --locked --manifest-path cold_clear_2\Cargo.toml
+python smoke_cc2.py
+```
+
+Enable it in the machine-local `config.json`:
+
+```json
+{
+  "solver_engine": "coldclear2",
+  "cc2_budget_ms": 350,
+  "cc2_current_states": 5000,
+  "cc2_strict_spin": true,
+  "capture_interval_ms": 50
+}
+```
+
+Use `"solver_engine": "legacy"` to select V11/V6 directly. An absolute
+`coldclear2_exe` path can be supplied when the executable is elsewhere. CC2's
+TBP response contains alternative immediate moves, not a sequential plan, so
+the CC2 path intentionally shows one ghost; the three-ghost display remains
+available whenever the V11 fallback supplies the recommendation.
+
+The adapter records local timing samples in `cc2_latency.jsonl`. After playing
+a few pieces, run `python perf_report.py` to see p50/p95 latency, prefetch hit
+rate, and restart reasons. Set `TRASSIST_CC2_METRICS=off` to disable this log.
+Set `TRASSIST_PREFETCH_ROUTES=1` to experiment with speculative Python route
+generation. Native CC2 tree prefetch remains enabled either way.
+
+Up to 250 rejected prefetch transitions are recorded locally in
+`cc2_transitions.jsonl`, using only 10-bit board occupancy rows and piece/queue
+names—never screenshots or input history. After a practice session, run:
+
+```powershell
+python transition_report.py
+python perf_report.py
+```
+
+The transition report distinguishes a geometrically compatible alternative
+placement from a board change that no visible four-cell lock explains. It does
+not prove movement reachability, so do not loosen synchronization checks based
+only on this report. Set `TRASSIST_CC2_TRACE=off` to disable tracing.
+
+CC2 suggestion requests use first-available polling: empty or unanswered
+replies are retried until the configured search deadline, and the first
+nonempty move list is still checked against a reachable local route before it
+is displayed. A repeated observation of the same piece reuses its validated
+reply without polling again. The metrics log records first reply time, first
+nonempty time, poll count, and unanswered polls; `perf_report.py` summarizes
+them alongside visible latency.
+
+Transient lock frames receive a bounded 130 ms coherence window before an
+unexpected board/NEXT/HOLD transition resets CC2. If the complete transition
+appears during that window, the verified prefetched tree is retained. Advice
+is briefly suppressed while a transition is pending instead of showing a
+fallback based on mixed frames.
+
+Measure CC2 readiness independently from capture and route enumeration with:
+
+```powershell
+python benchmark_cc2.py --trials 8 --budget-ms 800
+```
+
+Optional polling controls are `TRASSIST_CC2_FIRST_POLL_MS` (default `8`) and
+`TRASSIST_CC2_FIRST_INTERVAL_MS` (default `5`). The transition window is
+controlled by `TRASSIST_CC2_SETTLE_MS` (default `130`).
+
 ## Optional native V11 solver
 
 V11 uses a dependency-free Rust executable for reachable future-piece search.
@@ -148,6 +236,13 @@ python -m pytest -q
 - V11 temporarily prioritizes branches only after its bounded native movement
   search proves a reachable full T-spin Double. Negative probes can still miss
   180-kick, gravity-timed, or deeper tactical continuations.
+- The optional CC2 backend assumes guideline TBP semantics and cannot express
+  the live HOLD cooldown directly. Every displayed CC2 placement is therefore
+  filtered against the observed cooldown and the local reachable-route search.
+- CC2 uses the full configured budget after a fresh/reset state. It starts
+  searching the validated suggested move early, but uses that prefetched tree
+  only when the observed lock, queue shift, HOLD state, and cooldown prove the
+  displayed suggestion was followed; otherwise it resets.
 - Uses standard JLSTZ SRS kicks and a symmetric I-piece kick approximation.
   TETR.IO-specific I kicks and 180° kicks are not modeled exactly.
 - Ranks placements using line clears, height, holes, covered holes, surface
