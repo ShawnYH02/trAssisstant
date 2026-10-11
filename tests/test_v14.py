@@ -115,35 +115,6 @@ def test_slow_engine_uses_human_time_as_think_time(tmp_path):
     finally:c.close()
 
 
-def test_routes_prefetched_only_for_matching_spawn(tmp_path, monkeypatch):
-    import solver_v5 as v5
-    monkeypatch.setenv('TRASSIST_PREFETCH_ROUTES', '1')
-    c,log=make_client(tmp_path)
-    b=np.zeros((20,10),bool)
-    nxt=applied_lock(b,CELLS)
-    try:
-        c.query(b,'O',('I','T','S'),None,budget_ms=200)
-        c.remember(MOVE,CELLS,False)
-        routes_future=c._route_future
-        assert routes_future is not None
-        routes_future.result(timeout=12)
-        active=v5._make_spawn('I')
-        assert active is not None
-        cached=c.get_predicted_routes(nxt, active, ('T','S','Z'), None, True, 5000)
-        assert cached is not None
-        paired, states=cached
-        assert any(not use_hold for _,use_hold in paired)
-        assert any(use_hold and move.name=='T' for move,use_hold in paired)
-        assert states>0
-        assert c.get_predicted_routes(nxt, active, ('S','T','Z'), None, True, 5000) is None
-        wrong=nxt.copy();wrong[10,4]=True
-        assert c.get_predicted_routes(wrong, active, ('T','S','Z'), None, True, 5000) is None
-        assert c.get_predicted_routes(nxt, active, ('T','S','Z'), None, False, 5000) is not None
-        no_hold,_=c.get_predicted_routes(nxt, active, ('T','S','Z'), None, False, 5000)
-        assert not any(used for _,used in no_hold)
-    finally:c.close()
-
-
 def test_early_prefetch_works_in_integrated_bridge(tmp_path, monkeypatch):
     import solver_cc2_fast as fast
     import solver_cc2_reliable as reliable

@@ -16,6 +16,11 @@ def report(folder):
     print('Configured engine:', mode)
     print('Cold Clear adapter available:',
           (folder / 'solver_cc2.py').is_file())
+    print('Targeted route validator:',
+          (folder / 'solver_cc2_targeted.py').is_file())
+    print('Fast result delivery:',
+          (folder / 'result_delivery.py').is_file() and
+          'completion_pulse.watch(' in source)
     print('Coherent capture:', 'CoherentFrame(' in source)
     print('Pose dropout guard:', 'pose_guard.keep(' in source)
     print('Fail-closed CC2 mode:', 'COLD CLEAR UNAVAILABLE' in source)

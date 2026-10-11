@@ -7,7 +7,6 @@ Does not send any game inputs. Falls back to stop/start on any discrepancy.
 from __future__ import annotations
 
 import atexit
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import json
@@ -19,7 +18,6 @@ from typing import Optional
 import numpy as np
 
 import solver_cc2 as base
-import solver_v5 as v5
 
 
 @dataclass(frozen=True)
@@ -193,7 +191,6 @@ class FastTBPProcess(base.TBPProcess):
         self._bound_process = None
 
 
-_engine_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='cc2-tbp')
 _fast_clients: dict[str, FastTBPProcess] = {}
 _fast_lock = threading.Lock()
 
@@ -215,7 +212,6 @@ def close_fast_engines():
 
 
 atexit.register(close_fast_engines)
-atexit.register(lambda: _engine_pool.shutdown(wait=False, cancel_futures=True))
 
 
 def warm_up_cc2(executable: Path):
@@ -227,7 +223,7 @@ def warm_up_cc2(executable: Path):
         print('Cold Clear warmup warning:', exc)
 
 
-def _emit_metric(settings, data):
+def emit_metric(data):
     location = os.environ.get('TRASSIST_CC2_METRICS', 'cc2_latency.jsonl')
     if location.lower() in ('off', '0', 'false'):
         return
@@ -241,98 +237,10 @@ def _emit_metric(settings, data):
 def find_best_cc2_fast(board: np.ndarray, active, next_queue=(), hold=None,
                        can_hold=False, settings: base.SearchSettingsCC2 | None = None,
                        *, initial_b2b=0, initial_combo=-1) -> Optional[base.CC2Recommendation]:
-    """Overlay solve function with verified TBP prefetch and route checks."""
-    settings = settings or base.SearchSettingsCC2()
-    if active.name not in base.PIECES:
-        return None
-    started = time.perf_counter()
-    queue_pieces = tuple(p for p in (next_queue or ()) if p in base.PIECES)
-    from solver_cc2_reliable import get_reliable_client, report_unmatched
-    client = get_reliable_client(base.cc2_path(settings))
-    client.set_route_limit(settings.max_current_states)
-    # Engine search runs independently of Python's collision-path enumeration.
-    # On Windows this overlaps native CC2 computation with Python geometry work.
-    query_started = time.perf_counter()
-    pending = _engine_pool.submit(
-        client.query, board, active.name, queue_pieces, hold,
-        combo=max(0, initial_combo), b2b=bool(initial_b2b),
-        budget_ms=settings.time_budget_ms, can_hold=can_hold)
-    predicted = client.get_predicted_routes(
-        board, active, queue_pieces, hold, can_hold,
-        settings.max_current_states)
-    if predicted is not None:
-        paired, states = predicted
-    else:
-        roots, states = v5._current_locks(
-            board, active, settings.max_current_states)
-        paired = [(m, False) for m in roots]
-        if settings.allow_hold and can_hold is True:
-            held = hold or (queue_pieces[0] if queue_pieces else None)
-            if held:
-                spawn = v5._make_spawn(held)
-                if spawn is not None:
-                    hold_roots, extra = v5._current_locks(
-                        board, spawn, settings.max_current_states)
-                    states += extra
-                    paired.extend((m, True) for m in hold_roots)
-    pathfinding_ms = (time.perf_counter() - started) * 1000
-    # Collect engine reply even if no legal routes: its subprocess state must
-    # not stay in-flight when the next observed board is submitted.
-    msg = pending.result()
-    engine_ms = (time.perf_counter() - query_started) * 1000
-    if not paired:
-        client.forget()
-        return None
-    selected = None
-    for choice in msg.get('moves', []):
-        match = base.legal_root_for_suggestion(choice, paired, active.name, hold,
-                                               queue_pieces, can_hold is True and settings.allow_hold,
-                                               settings.strict_spin)
-        if match is not None:
-            selected = (choice, match)
-            break
-    # The search tree is reused only if a root was physically validated.
-    if selected is None and paired:
-        # The earliest nonempty reply can be unreachable from the observed
-        # pose. Let CC2 improve it briefly without weakening route/spin checks.
-        def is_legal(candidate):
-            return base.legal_root_for_suggestion(
-                candidate, paired, active.name, hold, queue_pieces,
-                can_hold is True and settings.allow_hold,
-                settings.strict_spin) is not None
-
-        retry = client.retry_for_valid(is_legal, budget_ms=250)
-        if retry is not None:
-            msg = retry
-            for choice in msg.get('moves', []):
-                match = base.legal_root_for_suggestion(
-                    choice, paired, active.name, hold, queue_pieces,
-                    can_hold is True and settings.allow_hold,
-                    settings.strict_spin)
-                if match is not None:
-                    selected = (choice, match)
-                    break
-    if selected is None:
-        report_unmatched(active.name, msg, states=states,
-                         strict_spin=settings.strict_spin)
-        client.forget()
-        return None
-    raw, (move, hold_used) = selected
-    client.remember(raw, move.cells, hold_used)
-    elapsed = (time.perf_counter() - started) * 1000
-    _emit_metric(settings, dict(event='solver', mode=client.mode,
-                                elapsed_ms=round(elapsed, 3),
-                                pathfinding_ms=round(pathfinding_ms, 3),
-                                engine_ms=round(engine_ms, 3),
-                                states=states,
-                                reset_reason=client.last_restart_reason,
-                                prefetch_hits=client.prefetch_hits,
-                                prefetch_misses=client.prefetch_misses,
-                                route_cache_hits=client.route_cache_hits))
-    actions = (('HOLD',) if hold_used else ()) + move.actions
-    return base.CC2Recommendation(
-        name=move.name, rotation=move.r, x=move.x, y=move.y,
-        cells=move.cells, score=0.0, cleared=move.lines, actions=actions,
-        visited_states=states, spin=move.spin, depth_used=0,
-        nodes_expanded=msg.get('move_info', {}).get('nodes', 0),
-        elapsed_ms=elapsed, hold_used=hold_used)
+    """Stable overlay entrypoint for targeted, verified CC2 advice."""
+    # Lazy import avoids the intentional client inheritance cycle: the resync
+    # client imports Observed/Selected from this module.
+    from solver_cc2_targeted import find_best_cc2_targeted
+    return find_best_cc2_targeted(
+        board, active, next_queue, hold, can_hold, settings,
+        initial_b2b=initial_b2b, initial_combo=initial_combo)

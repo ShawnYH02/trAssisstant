@@ -29,6 +29,8 @@ cc2_transitions.jsonl
 cc2_transitions_*.jsonl
 cc2_recovery.jsonl
 cc2_recovery_*.jsonl
+cc2_delivery.jsonl
+cc2_delivery_*.jsonl
 
 # Editor and operating-system metadata
 .vscode/

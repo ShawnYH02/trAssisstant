@@ -80,9 +80,14 @@ confirmed queue shift before it can identify CURRENT. If the queue changes too
 quickly or unexpectedly, advice is suspended until tracking resynchronizes.
 
 The solver runs on a background worker so capture and Ctrl+C remain responsive.
-CC2 returns the first nonempty suggestion within the recovery ceiling, while
-Python independently verifies that the current piece can reach it. The HUD
-reports total decision time.
+CC2 returns the first nonempty suggestion within the recovery ceiling, then
+Python performs an early-exit route search for CC2's preferred landing. It does
+not enumerate every possible lock first. The HUD reports total decision time.
+
+A lightweight completion timer checks the background Future every 12 ms. It
+requests the normal capture-and-validation path only when a result has just
+finished, reducing the wait for the next 50 ms capture tick without increasing
+idle screen captures. Repeated unchanged overlay states are not repainted.
 
 Accepted plans remain visible while the falling piece moves. The route text is
 marked stale when it was calculated from an earlier pose, but the landing guide
@@ -104,9 +109,9 @@ After a suggestion matches a legal current-piece route, CC2 speculatively
 advances that move and searches the likely next position while the player is
 still moving. When the lock occurs, the observed board, NEXT queue, HOLD
 contents, and cooldown must all match the prediction before that prefetched
-tree is used. Any mismatch safely restarts from the observed state. Optional
-Python legal-path precomputation for the predicted next piece is available,
-but disabled by default because local measurements showed no route-cache hits.
+tree is used. Any mismatch safely restarts from the observed state. Python
+route validation waits for a concrete CC2 target instead of speculatively
+enumerating every possible lock for the predicted next piece.
 
 Cold Clear 2 is third-party MIT/Apache-2.0 software and is intentionally not
 vendored into this repository. Build it beside `assistant_overlay.py`:
@@ -126,6 +131,7 @@ Enable it in the machine-local `config.json`:
   "cc2_current_states": 5000,
   "cc2_strict_spin": true,
   "capture_interval_ms": 50,
+  "completion_interval_ms": 12,
   "pose_grace_ms": 90
 }
 ```
@@ -135,10 +141,17 @@ elsewhere. CC2's TBP response contains alternative immediate moves, not a
 sequential plan, so the overlay intentionally shows one verified ghost.
 
 The adapter records local timing samples in `cc2_latency.jsonl`. After playing
-a few pieces, run `python perf_report.py` to see p50/p95 latency, prefetch hit
-rate, and restart reasons. Set `TRASSIST_CC2_METRICS=off` to disable this log.
-Set `TRASSIST_PREFETCH_ROUTES=1` to experiment with speculative Python route
-generation. Native CC2 tree prefetch remains enabled either way.
+a few pieces, run `python perf_report.py` to see p50/p95 engine, targeted-route,
+total latency, prefetch hit rate, and restart reasons. Set
+`TRASSIST_CC2_METRICS=off` to disable this log. Native CC2 tree prefetch remains
+enabled.
+
+Completed-result delivery timings are written separately to
+`cc2_delivery.jsonl`. `python perf_report.py` includes them automatically when
+the file exists. Set `TRASSIST_DELIVERY_LOG=off` to disable this log, or use the
+environment variable to select another filename. Delivery timing ends when all
+overlay fields are assigned; it does not measure the Windows compositor or the
+monitor.
 
 Up to 250 rejected prefetch transitions are recorded locally in
 `cc2_transitions.jsonl`, using only 10-bit board occupancy rows and piece/queue
@@ -199,6 +212,11 @@ python recovery_report.py
 (default `700`). Set `TRASSIST_CC2_RECOVERY_LOG=off` to disable this diagnostic
 log. Reduce the ceiling only after the report shows that valid replies reliably
 arrive sooner.
+
+Targeted route validation uses a 90 ms upper bound, controlled by
+`TRASSIST_CC2_ROUTE_MS`. If the first CC2 reply has no executable candidate,
+`TRASSIST_CC2_RETRY_MS` controls the later-candidate recovery window (default
+`250`). These are ceilings rather than mandatory waits.
 
 ## Troubleshooting recognition
 

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from capture_frame import CoherentFrame
 from pose_guard import PoseGapGuard
+from result_delivery import CompletionPulse, PaintDeduper
 from tetris_core import read_cells, occupied_without_active, shift_active
 from smooth_plan import PlanMemory, state_key as stable_state_key
 from solver_cc2 import (CC2Recommendation, SearchSettingsCC2, cc2_path,
@@ -252,6 +253,8 @@ def main():
                                      thread_name_prefix="tetris-solver")
     plan_memory = PlanMemory()
     ui_latency = UILatencyTracker()
+    completion_pulse = CompletionPulse()
+    paint_deduper = PaintDeduper()
     pose_guard = PoseGapGuard(grace_ms=int(cfg.get("pose_grace_ms", 90)))
     solver_future = None
     pending_key = None
@@ -354,6 +357,7 @@ def main():
                         ui_latency.observe(state_key)
                         if solver_future is not None and solver_future.done():
                             completed = solver_future
+                            completion_pulse.processed(completed)
                             completed_key = pending_key
                             solver_future = None
                             pending_key = None
@@ -392,6 +396,7 @@ def main():
                                 solve_function, stack.copy(), active,
                                 tuple(tracker.queue or ()), tracker.hold,
                                 tracker.can_hold, search_settings)
+                            completion_pulse.watch(solver_future, pending_key)
                         best = (result if result_key == state_key else
                                 cached.best if cached else None)
                         preview_only = (result_key != state_key and
@@ -465,17 +470,30 @@ def main():
                                                 f"{best.elapsed_ms:.0f}ms | "
                                                 f"score {best.score:.1f}"
                                                 f"{plan}")
-            overlay.update()
+                            completion_pulse.assigned(state_key)
+            if paint_deduper.changed(overlay):
+                overlay.update()
         except Exception as exc:
             overlay.clear_targets()
             overlay.text = f"Capture error: {type(exc).__name__}"
             overlay.subtitle = str(exc)[:80]
+            paint_deduper.invalidate()
             overlay.update()
 
     timer.timeout.connect(tick)
     capture_interval_ms = max(
         25, min(160, int(cfg.get("capture_interval_ms", 50))))
     timer.start(capture_interval_ms)
+
+    completion_timer = QTimer()
+
+    def deliver_completed_result():
+        if completion_pulse.ready(solver_future):
+            tick()
+
+    completion_timer.timeout.connect(deliver_completed_result)
+    completion_timer.start(max(
+        8, min(50, int(cfg.get("completion_interval_ms", 12)))))
 
     def request_stop(*_args):
         stop_requested.set()
@@ -518,6 +536,7 @@ def main():
         request_stop()
     finally:
         timer.stop()
+        completion_timer.stop()
         shutdown_timer.stop()
         overlay.close()
         capture.close()

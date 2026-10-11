@@ -9,8 +9,6 @@ revealed pieces and accept the prefetched tree. Otherwise restart safely.
 from __future__ import annotations
 
 import atexit
-import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
 import time
@@ -18,7 +16,6 @@ import time
 import numpy as np
 
 import solver_cc2 as base
-import solver_v5 as v5
 from solver_cc2_fast import (FastTBPProcess, Observed, Selected, applied_lock,
                              possible_advance)
 
@@ -33,78 +30,6 @@ class PrefetchTBPProcess(FastTBPProcess):
         self.prefetch_misses = 0
         self._reasons: dict[str, int] = {}
         self.last_restart_reason = None
-        self.route_limit = 5000
-        self._route_key = None
-        self._route_future = None
-        self.route_cache_hits = 0
-
-    def set_route_limit(self, value: int):
-        with self.lock:
-            self.route_limit = max(100, int(value))
-
-    @staticmethod
-    def _compute_speculative_routes(board, piece, held_choice, limit):
-        spawn = v5._make_spawn(piece)
-        if spawn is None:
-            return None
-        root, count = v5._current_locks(board, spawn, limit)
-        paired = [(m, False) for m in root]
-        if held_choice in base.PIECES:
-            held = v5._make_spawn(held_choice)
-            if held is not None:
-                held_root, num = v5._current_locks(board, held, limit)
-                count += num
-                paired.extend((m, True) for m in held_root)
-        return (paired, count, tuple(sorted(spawn.cells)), v5.active_pose(spawn))
-
-    def _begin_route_prefetch(self):
-        old, sel = self.observed, self.selected
-        if old is None or sel is None:
-            return
-        consumed = 2 if sel.hold_used and old.hold is None else 1
-        if len(old.queue) < consumed:
-            return
-        projected = applied_lock(old.board, sel.cells)
-        if projected is None:
-            return
-        next_name = old.queue[consumed - 1]
-        hold_name = old.current if sel.hold_used else old.hold
-        held_choice = hold_name or (old.queue[consumed] if len(old.queue) > consumed else None)
-        # No collision routes from a changed board can ever be reused.
-        self._route_key = (projected.copy(), next_name, hold_name, held_choice, self.route_limit)
-        if os.environ.get('TRASSIST_PREFETCH_ROUTES', '0').lower() in ('0', 'off', 'false'):
-            self._route_future = None
-        else:
-            self._route_future = _route_pool.submit(
-                self._compute_speculative_routes, projected.copy(),
-                next_name, held_choice, self.route_limit)
-
-    def get_predicted_routes(self, board, active, queue, hold, can_hold, limit):
-        with self.lock:
-            spec = self._route_key
-            future = self._route_future
-        if spec is None or future is None or not future.done():
-            return None
-        expected_board, expected_name, expected_hold, expected_held, expected_limit = spec
-        if (expected_name != active.name or expected_hold != hold or
-                expected_limit != limit or not np.array_equal(board, expected_board) or
-                expected_held != (hold or (queue[0] if queue else None))):
-            return None
-        try:
-            computed = future.result()
-        except Exception:
-            return None
-        if computed is None:
-            return None
-        paired, count, spawn_cells, spawn_pose = computed
-        if (tuple(sorted(active.cells)) != spawn_cells or
-                v5.active_pose(active) != spawn_pose):
-            return None
-        if can_hold is not True:
-            paired = [(m, use_hold) for m, use_hold in paired if not use_hold]
-        with self.lock:
-            self.route_cache_hits += 1
-        return paired, count
 
     def _reason(self, why: str):
         self._reasons[why] = self._reasons.get(why, 0) + 1
@@ -258,7 +183,6 @@ class PrefetchTBPProcess(FastTBPProcess):
                 self._drain()
                 self._send({'type': 'play', 'move': self.selected.raw})
                 self._prefetched = True
-                self._begin_route_prefetch()
             except (OSError, RuntimeError, ValueError):
                 # The selected move is retained; on confirmed lock the normal
                 # 'play' handoff can be retried or the process will be reopened.
@@ -278,7 +202,6 @@ class PrefetchTBPProcess(FastTBPProcess):
             self._cached_reply = None
 
 
-_route_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='cc2-route-prefetch')
 _instances: dict[str, PrefetchTBPProcess] = {}
 _instances_lock = threading.Lock()
 
@@ -300,4 +223,3 @@ def close_prefetch_clients():
 
 
 atexit.register(close_prefetch_clients)
-atexit.register(lambda: _route_pool.shutdown(wait=False, cancel_futures=True))

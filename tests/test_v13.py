@@ -137,21 +137,17 @@ def test_hold_cooldown_change_does_not_reuse_stale_tree(tmp_path):
         assert client.mode=='start' and client.starts==2
     finally:client.close()
 
-def test_root_and_engine_search_overlap(monkeypatch):
+def test_targeted_bridge_does_not_enumerate_all_roots(monkeypatch):
     import solver_cc2_fast as fast
     import solver_cc2_reliable as reliable
-    import solver_cc2_prefetch as prefetch
     import solver_v5 as v5
     import time
-    from types import SimpleNamespace
     class Client:
         mode='refresh'
         last_restart_reason=None
         prefetch_hits=0
         prefetch_misses=0
-        route_cache_hits=0
-        def set_route_limit(self, value):pass
-        def get_predicted_routes(self, *a, **k):return None
+        def preflight(self, *args):return False
         def query(self, *a, **k):
             time.sleep(.085)
             return {'moves':[{'location':{'type':'O','orientation':'north','x':0,'y':0},'spin':'none'}], 'move_info':{'nodes':1}}
@@ -159,16 +155,14 @@ def test_root_and_engine_search_overlap(monkeypatch):
         def forget(self):pass
     fake=Client()
     monkeypatch.setattr(reliable,'get_reliable_client',lambda path:fake)
-    original=v5._current_locks
-    def delayed(board,active,max_states):
-        time.sleep(.075)
-        return original(board,active,max_states)
-    monkeypatch.setattr(v5,'_current_locks',delayed)
+    def reject_whole_board_search(*args):
+        raise AssertionError('whole-board search must not run')
+    monkeypatch.setattr(v5, '_current_locks', reject_whole_board_search)
     monkeypatch.setenv('TRASSIST_CC2_METRICS','off')
     t0=time.perf_counter()
     result=fast.find_best_cc2_fast(np.zeros((20,10),bool),v5._make_spawn('O'),('I','T'),None,False,
                                    base.SearchSettingsCC2(time_budget_ms=200))
     duration=time.perf_counter()-t0
     assert result is not None
-    # No hard timing assertion on slow CI; overlap must return a valid move.
+    # Engine readiness is still awaited; only whole-board Python search is gone.
     assert duration >= .08
